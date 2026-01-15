@@ -1,0 +1,8 @@
+# Requirements untuk PZEM Monitoring System
+flask==2.3.3
+flask-socketio==5.3.6
+psycopg2-binary==2.9.7
+paho-mqtt==1.6.1
+python-socketio==5.8.0
+python-engineio==4.7.1
+eventlet==0.33.3

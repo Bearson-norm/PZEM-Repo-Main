@@ -1,0 +1,114 @@
+name: Manual Deploy to VPS
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+      fresh_deploy:
+        description: 'Fresh deployment (delete database)'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  VPS_USER: ${{ secrets.VPS_USER }}
+  VPS_HOST: ${{ secrets.VPS_HOST }}
+  VPS_DEPLOY_DIR: /opt/pzem-monitoring
+
+jobs:
+  deploy:
+    name: Manual Deploy
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup SSH
+      uses: webfactory/ssh-agent@v0.9.0
+      with:
+        ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
+
+    - name: Add VPS to known hosts
+      run: |
+        mkdir -p ~/.ssh
+        ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+        chmod 600 ~/.ssh/known_hosts
+
+    - name: Create deployment package
+      run: |
+        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        PACKAGE_NAME="pzem-monitoring-deploy-${TIMESTAMP}.tar.gz"
+        
+        tar -czf ${PACKAGE_NAME} \
+          dashboard/ \
+          mqtt/ \
+          docker-compose.yml \
+          start.sh \
+          nginx-pzem.conf \
+          setup-nginx-ssl.sh \
+          deploy-vps-fresh.sh \
+          *.md \
+          .github/
+        
+        echo "PACKAGE_NAME=${PACKAGE_NAME}" >> $GITHUB_ENV
+        echo "Package created: ${PACKAGE_NAME}"
+
+    - name: Upload package to VPS
+      run: |
+        scp -o StrictHostKeyChecking=no ${PACKAGE_NAME} ${VPS_USER}@${VPS_HOST}:/tmp/
+        echo "Package uploaded to VPS"
+
+    - name: Deploy to VPS
+      run: |
+        if [ "${{ inputs.fresh_deploy }}" == "true" ]; then
+          echo "⚠️  FRESH DEPLOYMENT - Database will be deleted!"
+          DEPLOY_SCRIPT="deploy-vps-fresh.sh"
+        else
+          echo "🔄 Standard deployment - Database will be preserved"
+          DEPLOY_SCRIPT="deploy-to-existing-vps.sh"
+        fi
+        
+        ssh -o StrictHostKeyChecking=no ${VPS_USER}@${VPS_HOST} << EOF
+          cd /tmp
+          tar -xzf ${PACKAGE_NAME}
+          cd pzem-monitoring
+          
+          if [ -f "${DEPLOY_SCRIPT}" ]; then
+            chmod +x ${DEPLOY_SCRIPT}
+            bash ${DEPLOY_SCRIPT}
+          else
+            echo "Deploy script not found, using standard deployment"
+            # Standard deployment steps
+            cd /opt
+            if [ -d "pzem-monitoring" ]; then
+              mv pzem-monitoring pzem-monitoring_backup_\$(date +%Y%m%d_%H%M%S)
+            fi
+            mv /tmp/pzem-monitoring pzem-monitoring
+            cd pzem-monitoring
+            docker-compose down || true
+            docker-compose build
+            docker-compose up -d
+          fi
+          
+          rm -f /tmp/${PACKAGE_NAME}
+        EOF
+
+    - name: Verify deployment
+      run: |
+        ssh -o StrictHostKeyChecking=no ${VPS_USER}@${VPS_HOST} << 'EOF'
+          cd ${VPS_DEPLOY_DIR}
+          echo "📊 Service Status:"
+          docker-compose ps
+          echo ""
+          echo "🔍 Health Check:"
+          curl -f http://localhost:5000/health || echo "Health check failed"
+        EOF
+

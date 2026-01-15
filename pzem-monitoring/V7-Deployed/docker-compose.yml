@@ -1,0 +1,92 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: pzem_postgres
+    environment:
+      POSTGRES_DB: pzem_monitoring
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: Admin123
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pzem_network
+
+  # MQTT Client Service
+  mqtt_client:
+    build:
+      context: .
+      dockerfile: Dockerfile.mqtt
+    container_name: pzem_mqtt_client
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=pzem_monitoring
+      - DB_USER=postgres
+      - DB_PASSWORD=Admin123
+      - MQTT_BROKER=103.87.67.139
+      - MQTT_PORT=1883
+      - MQTT_TOPIC=energy/pzem/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - pzem_network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import psycopg2; psycopg2.connect(host='postgres', database='pzem_monitoring', user='postgres', password='Admin123')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Flask Dashboard Service
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    container_name: pzem_dashboard
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=pzem_monitoring
+      - DB_USER=postgres
+      - DB_PASSWORD=Admin123
+      - FLASK_ENV=production
+      - FLASK_DEBUG=0
+    ports:
+      - "5000:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
+      - ./templates:/app/templates:ro
+    networks:
+      - pzem_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  postgres_data:
+
+networks:
+  pzem_network:
+    driver: bridge

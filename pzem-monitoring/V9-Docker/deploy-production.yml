@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15
+    container_name: pzem_db
+    environment:
+      POSTGRES_DB: ${DB_NAME:-pzem_monitoring}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASS:-Admin123}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backups:/backups
+    restart: unless-stopped
+    networks:
+      - pzem_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  dashboard:
+    build: ./dashboard
+    container_name: pzem_dashboard
+    ports:
+      - "127.0.0.1:5000:5000"  # Only bind to localhost (use nginx reverse proxy)
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - DB_HOST=db
+      - DB_NAME=${DB_NAME:-pzem_monitoring}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASS=${DB_PASS:-Admin123}
+      - PLN_TARIFF_CLASS=${PLN_TARIFF_CLASS:-R1}
+      - PLN_PPN_PERCENT=${PLN_PPN_PERCENT:-0.11}
+    volumes:
+      - ./dashboard:/app
+      - reports_data:/app/reports
+    restart: unless-stopped
+    networks:
+      - pzem_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  mqtt-listener:
+    build: ./mqtt
+    container_name: pzem_mqtt_listener
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - DB_HOST=db
+      - DB_NAME=${DB_NAME:-pzem_monitoring}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASS=${DB_PASS:-Admin123}
+      - MQTT_BROKER=${MQTT_BROKER:-localhost}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - MQTT_TOPIC=${MQTT_TOPIC:-pzem/data}
+    volumes:
+      - ./mqtt:/app
+    restart: unless-stopped
+    networks:
+      - pzem_network
+
+volumes:
+  pgdata:
+    driver: local
+  reports_data:
+    driver: local
+
+networks:
+  pzem_network:
+    driver: bridge

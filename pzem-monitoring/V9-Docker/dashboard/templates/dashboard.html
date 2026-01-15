@@ -1,0 +1,1938 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PZEM 3-Phase Energy Monitoring Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.0/socket.io.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #e8f5e8 0%, #f0f8ff 50%, #f5f5dc 100%);
+            min-height: 100vh;
+            color: #2c3e50;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 30px;
+            margin-bottom: 25px;
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.08);
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .header h1 {
+            font-size: 2.2rem;
+            color: #34495e;
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+
+        .header p {
+            color: #7f8c8d;
+            font-size: 1rem;
+            margin-bottom: 20px;
+        }
+
+        .header-actions {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .action-btn {
+            background: linear-gradient(135deg, #95a5a6, #7f8c8d);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .action-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(149, 165, 166, 0.3);
+            background: linear-gradient(135deg, #7f8c8d, #95a5a6);
+        }
+
+        .action-btn.report {
+            background: linear-gradient(135deg, #16a085, #1abc9c);
+        }
+
+        .action-btn.report:hover {
+            background: linear-gradient(135deg, #1abc9c, #16a085);
+            box-shadow: 0 5px 15px rgba(26, 188, 156, 0.3);
+        }
+
+        .action-btn.logging {
+            background: linear-gradient(135deg, #8e44ad, #9b59b6);
+        }
+
+        .action-btn.logging:hover {
+            background: linear-gradient(135deg, #9b59b6, #8e44ad);
+            box-shadow: 0 5px 15px rgba(155, 89, 182, 0.3);
+        }
+
+        /* 3-Phase Analysis Panel */
+        .three-phase-panel {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 25px;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .panel-title {
+            font-size: 1.3rem;
+            color: #2c3e50;
+            margin-bottom: 20px;
+            font-weight: 600;
+            text-align: center;
+        }
+
+        .three-phase-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .phase-card {
+            background: linear-gradient(135deg, rgba(52, 152, 219, 0.1), rgba(155, 89, 182, 0.1));
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            border: 2px solid rgba(52, 152, 219, 0.2);
+        }
+
+        .phase-label {
+            font-size: 0.9rem;
+            color: #7f8c8d;
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+
+        .phase-value {
+            font-size: 1.5rem;
+            color: #2c3e50;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .phase-unit {
+            font-size: 0.8rem;
+            color: #95a5a6;
+        }
+
+        /* System Calculations */
+        .system-calculations {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .calc-card {
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
+            border-left: 4px solid #3498db;
+        }
+
+        .calc-title {
+            font-size: 0.9rem;
+            color: #7f8c8d;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+
+        .calc-value {
+            font-size: 1.8rem;
+            color: #2c3e50;
+            font-weight: bold;
+        }
+
+        /* Logging Panel */
+        .logging-panel {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 25px;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .logging-controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .log-btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .log-btn.start {
+            background: linear-gradient(135deg, #27ae60, #2ecc71);
+            color: white;
+        }
+
+        .log-btn.stop {
+            background: linear-gradient(135deg, #e74c3c, #c0392b);
+            color: white;
+        }
+
+        .log-btn.export {
+            background: linear-gradient(135deg, #f39c12, #e67e22);
+            color: white;
+        }
+
+        .log-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.9rem;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #e74c3c;
+        }
+
+        .status-dot.active {
+            background: #27ae60;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .log-display {
+            background: #2c3e50;
+            color: #ecf0f1;
+            border-radius: 8px;
+            padding: 15px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.8rem;
+            height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+
+        /* Stats grid styling */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 20px;
+            margin-bottom: 25px;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 25px;
+            text-align: center;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .stat-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 12px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .stat-icon {
+            width: 55px;
+            height: 55px;
+            margin: 0 auto 15px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.6rem;
+            color: white;
+        }
+
+        .stat-icon.devices { background: linear-gradient(135deg, #27ae60, #2ecc71); }
+        .stat-icon.power { background: linear-gradient(135deg, #e67e22, #f39c12); }
+        .stat-icon.energy { background: linear-gradient(135deg, #3498db, #5dade2); }
+        .stat-icon.online { background: linear-gradient(135deg, #8e44ad, #9b59b6); }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            color: #7f8c8d;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 500;
+        }
+
+        .controls {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 25px;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .controls-grid {
+            display: grid;
+            grid-template-columns: 1fr auto auto;
+            gap: 15px;
+            align-items: center;
+        }
+
+        .device-selector select,
+        .period-selector select {
+            padding: 10px 15px;
+            border: 2px solid #ecf0f1;
+            border-radius: 8px;
+            background: white;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            color: #2c3e50;
+        }
+
+        .device-selector select:focus,
+        .period-selector select:focus {
+            outline: none;
+            border-color: #3498db;
+            box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+        }
+
+        .refresh-btn {
+            background: linear-gradient(135deg, #3498db, #5dade2);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .refresh-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(52, 152, 219, 0.3);
+        }
+
+        /* Chart comparison styles */
+        .chart-comparison {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 25px;
+        }
+
+        .comparison-chart {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .comparison-title {
+            font-size: 1rem;
+            color: #2c3e50;
+            margin-bottom: 15px;
+            text-align: center;
+            font-weight: 600;
+        }
+
+        .comparison-wrapper {
+            height: 250px;
+            position: relative;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 25px;
+            margin-bottom: 25px;
+        }
+
+        .chart-container {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06);
+            height: 500px;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .chart-title {
+            font-size: 1.2rem;
+            color: #2c3e50;
+            margin-bottom: 20px;
+            text-align: center;
+            font-weight: 600;
+        }
+
+        .chart-wrapper {
+            position: relative;
+            height: calc(100% - 60px);
+        }
+
+        .device-list {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06);
+            max-height: 500px;
+            overflow-y: auto;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .device-list h3 {
+            color: #2c3e50;
+            margin-bottom: 20px;
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+
+        .device-item {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: 2px solid transparent;
+        }
+
+        .device-item:hover {
+            background: #e8f4fd;
+            border-color: #3498db;
+        }
+
+        .device-item.active {
+            background: linear-gradient(135deg, #3498db, #5dade2);
+            color: white;
+        }
+
+        .device-name {
+            font-weight: 600;
+            font-size: 0.95rem;
+            margin-bottom: 8px;
+        }
+
+        .device-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            font-size: 0.8rem;
+        }
+
+        .data-table {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06);
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .table-title {
+            font-size: 1.2rem;
+            color: #2c3e50;
+            margin-bottom: 20px;
+            text-align: center;
+            font-weight: 600;
+        }
+
+        .table-wrapper {
+            overflow-x: auto;
+            max-height: 400px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ecf0f1;
+        }
+
+        th {
+            background: linear-gradient(135deg, #34495e, #2c3e50);
+            color: white;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+        }
+
+        tr:nth-child(even) {
+            background-color: rgba(248, 249, 250, 0.5);
+        }
+
+        tr:hover {
+            background-color: rgba(52, 152, 219, 0.1);
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+
+        .status-online { background-color: #27ae60; }
+        .status-offline { background-color: #e74c3c; }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #7f8c8d;
+        }
+
+        .loading i {
+            font-size: 1.8rem;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .no-data {
+            text-align: center;
+            padding: 40px;
+            color: #7f8c8d;
+        }
+
+        .last-update {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            color: #7f8c8d;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .debug-panel {
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 10px;
+            padding: 15px;
+            margin: 20px 0;
+            font-family: monospace;
+            font-size: 0.75rem;
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ecf0f1;
+        }
+        
+        .debug-toggle {
+            background: #95a5a6;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-bottom: 10px;
+            font-size: 0.8rem;
+        }
+
+        @media (max-width: 1024px) {
+            .chart-comparison {
+                grid-template-columns: 1fr;
+            }
+            
+            .three-phase-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .system-calculations {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+            
+            .controls-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .header h1 {
+                font-size: 1.8rem;
+            }
+
+            .header-actions {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            .system-calculations {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1><i class="fas fa-bolt"></i> PZEM 3-Phase Energy Monitoring</h1>
+            <p>Real-time Power Analysis with Advanced Calculations & Logging</p>
+            <div class="header-actions">
+                <button class="action-btn" onclick="refreshData()">
+                    <i class="fas fa-sync-alt"></i>
+                    Refresh Data
+                </button>
+                <button class="action-btn logging" onclick="toggleLogging()">
+                    <i class="fas fa-file-alt"></i>
+                    <span id="loggingBtnText">Start Logging</span>
+                </button>
+                <a href="/reports" class="action-btn report">
+                    <i class="fas fa-file-pdf"></i>
+                    Generate Report
+                </a>
+            </div>
+        </div>
+
+        <button class="debug-toggle" onclick="toggleDebug()">Toggle Debug</button>
+        <div class="debug-panel" id="debugPanel" style="display: none;">
+            <div id="debugInfo">Debug info will appear here...</div>
+        </div>
+
+        <div class="three-phase-panel">
+            <div class="panel-title">3-Phase System Analysis</div>
+            <div class="three-phase-grid">
+                <div class="phase-card">
+                    <div class="phase-label">Phase R (L1)</div>
+                    <div class="phase-value" id="phaseR_voltage">0.0</div>
+                    <div class="phase-unit">V</div>
+                </div>
+                <div class="phase-card">
+                    <div class="phase-label">Phase S (L2)</div>
+                    <div class="phase-value" id="phaseS_voltage">0.0</div>
+                    <div class="phase-unit">V</div>
+                </div>
+                <div class="phase-card">
+                    <div class="phase-label">Phase T (L3)</div>
+                    <div class="phase-value" id="phaseT_voltage">0.0</div>
+                    <div class="phase-unit">V</div>
+                </div>
+                <div class="phase-card">
+                    <div class="phase-label">Neutral</div>
+                    <div class="phase-value" id="neutral_voltage">0.0</div>
+                    <div class="phase-unit">V</div>
+                </div>
+            </div>
+            
+            <div class="system-calculations">
+                <div class="calc-card">
+                    <div class="calc-title">Total Active Power</div>
+                    <div class="calc-value"><span id="total_active_power">0.0</span> W</div>
+                </div>
+                <div class="calc-card">
+                    <div class="calc-title">Total Apparent Power</div>
+                    <div class="calc-value"><span id="total_apparent_power">0.0</span> VA</div>
+                </div>
+                <div class="calc-card">
+                    <div class="calc-title">Total Reactive Power</div>
+                    <div class="calc-value"><span id="total_reactive_power">0.0</span> VAR</div>
+                </div>
+                <div class="calc-card">
+                    <div class="calc-title">Power Factor</div>
+                    <div class="calc-value" id="system_power_factor">0.00</div>
+                </div>
+                <div class="calc-card">
+                    <div class="calc-title">Load Imbalance</div>
+                    <div class="calc-value"><span id="load_imbalance">0.0</span> %</div>
+                </div>
+                <div class="calc-card">
+                    <div class="calc-title">System Efficiency</div>
+                    <div class="calc-value"><span id="system_efficiency">0.0</span> %</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="logging-panel">
+            <div class="panel-title">Data Logging & Export</div>
+            <div class="logging-controls">
+                <button class="log-btn start" onclick="startLogging()">
+                    <i class="fas fa-play"></i> Start Logging
+                </button>
+                <button class="log-btn stop" onclick="stopLogging()">
+                    <i class="fas fa-stop"></i> Stop Logging
+                </button>
+                <button class="log-btn export" onclick="exportLogs()">
+                    <i class="fas fa-download"></i> Export CSV
+                </button>
+                <div class="log-status">
+                    <div class="status-dot" id="loggingStatus"></div>
+                    <span id="loggingStatusText">Logging Stopped</span>
+                </div>
+                <div style="margin-left: auto;">
+                    <span>Records: <strong id="logRecordCount">0</strong></span>
+                </div>
+            </div>
+            <div class="log-display" id="logDisplay">[System Ready] Logging system initialized
+[Info] Click 'Start Logging' to begin data collection
+            </div>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon devices">
+                    <i class="fas fa-microchip"></i>
+                </div>
+                <div class="stat-value" id="totalDevices">0</div>
+                <div class="stat-label">Total Devices</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon online">
+                    <i class="fas fa-wifi"></i>
+                </div>
+                <div class="stat-value" id="onlineDevices">0</div>
+                <div class="stat-label">Online Devices</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon power">
+                    <i class="fas fa-lightning-bolt"></i>
+                </div>
+                <div class="stat-value" id="totalPower">0 W</div>
+                <div class="stat-label">Total Power</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon energy">
+                    <i class="fas fa-battery-three-quarters"></i>
+                </div>
+                <div class="stat-value" id="totalEnergy">0 kWh</div>
+                <div class="stat-label">Total Energy</div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <div class="controls-grid">
+                <div class="device-selector">
+                    <select id="deviceSelect">
+                        <option value="">Loading devices...</option>
+                    </select>
+                </div>
+                <div class="period-selector">
+                    <select id="periodSelect">
+                        <option value="hour">Last Hour</option>
+                        <option value="day">Last Day</option>
+                        <option value="week">Last Week</option>
+                        <option value="month">Last Month</option>
+                    </select>
+                </div>
+                <button class="refresh-btn" onclick="refreshData()">
+                    <i class="fas fa-sync-alt"></i>
+                    Refresh
+                </button>
+            </div>
+        </div>
+
+        <div class="chart-comparison">
+            <div class="comparison-chart">
+                <div class="comparison-title">Voltage Comparison (V)</div>
+                <div class="comparison-wrapper">
+                    <canvas id="voltageChart"></canvas>
+                </div>
+            </div>
+            <div class="comparison-chart">
+                <div class="comparison-title">Current Comparison (A)</div>
+                <div class="comparison-wrapper">
+                    <canvas id="currentChart"></canvas>
+                </div>
+            </div>
+            <div class="comparison-chart">
+                <div class="comparison-title">Power Comparison (W)</div>
+                <div class="comparison-wrapper">
+                    <canvas id="powerChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="main-content">
+            <div class="chart-container">
+                <div class="chart-title">Selected Device Detailed Analysis</div>
+                <div class="chart-wrapper">
+                    <canvas id="detailChart"></canvas>
+                </div>
+            </div>
+
+            <div class="device-list">
+                <h3>Active Devices</h3>
+                <div id="deviceListContainer">
+                    <div class="loading">
+                        <i class="fas fa-spinner"></i>
+                        <p>Loading devices...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="data-table">
+            <div class="table-title">Recent Data Records</div>
+            <div class="table-wrapper">
+                <table id="dataTable">
+                    <thead>
+                        <tr>
+                            <th>Device</th>
+                            <th>Time</th>
+                            <th>Voltage (V)</th>
+                            <th>Current (A)</th>
+                            <th>Power (W)</th>
+                            <th>Energy (kWh)</th>
+                            <th>PF</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="dataTableBody">
+                        <tr>
+                            <td colspan="8" class="loading">
+                                <i class="fas fa-spinner"></i>
+                                Loading data...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="last-update" id="lastUpdate">
+        Last update: Never
+    </div>
+<script>
+// Global variables
+        let detailChart = null;
+        let voltageChart = null;
+        let currentChart = null;
+        let powerChart = null;
+        let socket = null;
+        let currentDevice = '';
+        let currentPeriod = 'hour';
+        let devices = [];
+        let latestData = {};
+        
+        // Logging variables
+        let isLogging = false;
+        let logData = [];
+        let logInterval = null;
+        let logStartTime = null;
+
+        // 3-Phase calculations
+        let threePhaseData = {
+            phases: {
+                R: { voltage: 0, current: 0, power: 0, pf: 0 },
+                S: { voltage: 0, current: 0, power: 0, pf: 0 },
+                T: { voltage: 0, current: 0, power: 0, pf: 0 }
+            },
+            totals: {
+                activePower: 0,
+                apparentPower: 0,
+                reactivePower: 0,
+                powerFactor: 0,
+                imbalance: 0,
+                efficiency: 0
+            }
+        };
+
+        // Chart colors for different devices
+        const deviceColors = [
+            '#e74c3c', '#3498db', '#27ae60', '#f39c12', '#9b59b6',
+            '#1abc9c', '#34495e', '#e67e22', '#95a5a6', '#2ecc71'
+        ];
+
+        // Initialize the dashboard
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeSocketIO();
+            initializeCharts();
+            loadSystemStatus();
+            loadDevices();
+            
+            // Set up event listeners
+            document.getElementById('deviceSelect').addEventListener('change', onDeviceChange);
+            document.getElementById('periodSelect').addEventListener('change', onPeriodChange);
+            
+            // Auto refresh every 30 seconds
+            setInterval(refreshData, 30000);
+            
+            // Update 3-phase calculations every 5 seconds
+            setInterval(update3PhaseCalculations, 5000);
+        });
+
+        // Debug functions
+        function toggleDebug() {
+            const panel = document.getElementById('debugPanel');
+            panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+        }
+
+        function addDebugLog(message) {
+            const debugInfo = document.getElementById('debugInfo');
+            const timestamp = new Date().toLocaleTimeString();
+            debugInfo.innerHTML += `[${timestamp}] ${message}<br>`;
+            debugInfo.scrollTop = debugInfo.scrollHeight;
+        }
+
+        // Logging functions
+        function toggleLogging() {
+            if (isLogging) {
+                stopLogging();
+            } else {
+                startLogging();
+            }
+        }
+
+        function startLogging() {
+            if (isLogging) return;
+            
+            isLogging = true;
+            logStartTime = new Date();
+            logData = [];
+            
+            // Update UI
+            document.getElementById('loggingBtnText').textContent = 'Stop Logging';
+            document.getElementById('loggingStatus').classList.add('active');
+            document.getElementById('loggingStatusText').textContent = 'Logging Active';
+            
+            // Add log entry
+            addLogEntry('INFO', 'Data logging started');
+            
+            // Start logging interval (every 10 seconds)
+            logInterval = setInterval(logCurrentData, 10000);
+            
+            addDebugLog('Data logging started');
+        }
+
+        function stopLogging() {
+            if (!isLogging) return;
+            
+            isLogging = false;
+            
+            if (logInterval) {
+                clearInterval(logInterval);
+                logInterval = null;
+            }
+            
+            // Update UI
+            document.getElementById('loggingBtnText').textContent = 'Start Logging';
+            document.getElementById('loggingStatus').classList.remove('active');
+            document.getElementById('loggingStatusText').textContent = 'Logging Stopped';
+            
+            // Add log entry
+            const duration = ((new Date() - logStartTime) / 1000 / 60).toFixed(1);
+            addLogEntry('INFO', `Data logging stopped. Duration: ${duration} minutes`);
+            
+            addDebugLog('Data logging stopped');
+        }
+
+        function logCurrentData() {
+            if (!isLogging || Object.keys(latestData).length === 0) return;
+            
+            const timestamp = new Date();
+            const logEntry = {
+                timestamp: timestamp.toISOString(),
+                devices: {},
+                calculations: { ...threePhaseData.totals }
+            };
+            
+            // Log all device data
+            Object.entries(latestData).forEach(([deviceAddress, deviceData]) => {
+                logEntry.devices[deviceAddress] = {
+                    voltage: parseFloat(deviceData.voltage || deviceData.avg_voltage || 0),
+                    current: parseFloat(deviceData.current || deviceData.avg_current || 0),
+                    power: parseFloat(deviceData.power || deviceData.avg_power || 0),
+                    energy: parseFloat(deviceData.energy || deviceData.energy_consumed || deviceData.total_energy || 0),
+                    power_factor: parseFloat(deviceData.power_factor || 1.0),
+                    frequency: parseFloat(deviceData.frequency || 50.0)
+                };
+            });
+            
+            logData.push(logEntry);
+            document.getElementById('logRecordCount').textContent = logData.length;
+            
+            addLogEntry('DATA', `Logged data for ${Object.keys(logEntry.devices).length} devices`);
+        }
+
+        function addLogEntry(level, message) {
+            const logDisplay = document.getElementById('logDisplay');
+            const timestamp = new Date().toLocaleTimeString();
+            const logLine = `[${timestamp}] [${level}] ${message}\n`;
+            
+            logDisplay.textContent += logLine;
+            logDisplay.scrollTop = logDisplay.scrollHeight;
+        }
+
+        function exportLogs() {
+            if (logData.length === 0) {
+                addLogEntry('WARN', 'No data to export');
+                return;
+            }
+            
+            // Convert to CSV format
+            let csvContent = 'Timestamp,Device,Voltage(V),Current(A),Power(W),Energy(kWh),PowerFactor,Frequency(Hz)\n';
+            
+            logData.forEach(entry => {
+                Object.entries(entry.devices).forEach(([deviceId, deviceData]) => {
+                    csvContent += `${entry.timestamp},${deviceId},${deviceData.voltage},${deviceData.current},${deviceData.power},${deviceData.energy},${deviceData.power_factor},${deviceData.frequency}\n`;
+                });
+            });
+            
+            // Add 3-phase calculations summary
+            csvContent += '\n3-Phase System Calculations\n';
+            csvContent += 'Parameter,Value,Unit\n';
+            csvContent += `Total Active Power,${threePhaseData.totals.activePower},W\n`;
+            csvContent += `Total Apparent Power,${threePhaseData.totals.apparentPower},VA\n`;
+            csvContent += `Total Reactive Power,${threePhaseData.totals.reactivePower},VAR\n`;
+            csvContent += `System Power Factor,${threePhaseData.totals.powerFactor},-\n`;
+            csvContent += `Load Imbalance,${threePhaseData.totals.imbalance},%\n`;
+            csvContent += `System Efficiency,${threePhaseData.totals.efficiency},%\n`;
+            
+            // Create and download file
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+            link.setAttribute('href', url);
+            
+            const filename = `PZEM_Log_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.csv`;
+            link.setAttribute('download', filename);
+            link.style.visibility = 'hidden';
+            
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            addLogEntry('INFO', `Data exported to ${filename}`);
+            addDebugLog(`Exported ${logData.length} log entries to CSV`);
+        }
+
+        // 3-Phase calculation functions
+        function update3PhaseCalculations() {
+            if (Object.keys(latestData).length === 0) return;
+            
+            // Reset calculations
+            const phases = { R: null, S: null, T: null };
+            let totalActivePower = 0;
+            let totalApparentPower = 0;
+            let totalReactivePower = 0;
+            let voltages = [];
+            let powers = [];
+            
+            // Map devices to phases (assuming first 3 devices are R, S, T)
+            const deviceAddresses = Object.keys(latestData).sort();
+            const phaseNames = ['R', 'S', 'T'];
+            
+            deviceAddresses.slice(0, 3).forEach((deviceAddress, index) => {
+                const deviceData = latestData[deviceAddress];
+                const phaseName = phaseNames[index];
+                
+                if (deviceData) {
+                    const voltage = parseFloat(deviceData.voltage || deviceData.avg_voltage || 0);
+                    const current = parseFloat(deviceData.current || deviceData.avg_current || 0);
+                    const power = parseFloat(deviceData.power || deviceData.avg_power || 0);
+                    const powerFactor = parseFloat(deviceData.power_factor || 0.9);
+                    
+                    phases[phaseName] = {
+                        voltage: voltage,
+                        current: current,
+                        power: power,
+                        pf: powerFactor
+                    };
+                    
+                    // Calculate powers
+                    const apparentPower = voltage * current;
+                    const activePower = power;
+                    const reactivePower = Math.sqrt(Math.max(0, Math.pow(apparentPower, 2) - Math.pow(activePower, 2)));
+                    
+                    totalActivePower += activePower;
+                    totalApparentPower += apparentPower;
+                    totalReactivePower += reactivePower;
+                    
+                    voltages.push(voltage);
+                    powers.push(power);
+                }
+            });
+            
+            // Calculate system metrics
+            const systemPowerFactor = totalApparentPower > 0 ? totalActivePower / totalApparentPower : 0;
+            const systemEfficiency = systemPowerFactor * 100;
+            
+            // Calculate load imbalance (standard deviation as percentage of average)
+            const avgPower = powers.length > 0 ? powers.reduce((a, b) => a + b, 0) / powers.length : 0;
+            const powerVariance = powers.length > 0 ? 
+                powers.reduce((sum, power) => sum + Math.pow(power - avgPower, 2), 0) / powers.length : 0;
+            const powerStdDev = Math.sqrt(powerVariance);
+            const loadImbalance = avgPower > 0 ? (powerStdDev / avgPower) * 100 : 0;
+            
+            // Update global data
+            threePhaseData = {
+                phases: phases,
+                totals: {
+                    activePower: totalActivePower,
+                    apparentPower: totalApparentPower,
+                    reactivePower: totalReactivePower,
+                    powerFactor: systemPowerFactor,
+                    imbalance: loadImbalance,
+                    efficiency: systemEfficiency
+                }
+            };
+            
+            // Update UI
+            update3PhaseUI();
+        }
+
+        function update3PhaseUI() {
+            // Update phase displays
+            ['R', 'S', 'T'].forEach((phase, index) => {
+                const phaseData = threePhaseData.phases[phase];
+                if (phaseData) {
+                    document.getElementById(`phase${phase}_voltage`).textContent = phaseData.voltage.toFixed(1);
+                }
+            });
+            
+            // Update neutral (calculated as average imbalance)
+            const avgVoltage = Object.values(threePhaseData.phases)
+                .filter(p => p !== null)
+                .reduce((sum, phase) => sum + phase.voltage, 0) / 3;
+            document.getElementById('neutral_voltage').textContent = (240 - avgVoltage).toFixed(1);
+            
+            // Update system calculations
+            document.getElementById('total_active_power').textContent = threePhaseData.totals.activePower.toFixed(1);
+            document.getElementById('total_apparent_power').textContent = threePhaseData.totals.apparentPower.toFixed(1);
+            document.getElementById('total_reactive_power').textContent = threePhaseData.totals.reactivePower.toFixed(1);
+            document.getElementById('system_power_factor').textContent = threePhaseData.totals.powerFactor.toFixed(3);
+            document.getElementById('load_imbalance').textContent = threePhaseData.totals.imbalance.toFixed(1);
+            document.getElementById('system_efficiency').textContent = threePhaseData.totals.efficiency.toFixed(1);
+        }
+
+        // Initialize Socket.IO connection
+        function initializeSocketIO() {
+            socket = io();
+            
+            socket.on('connect', function() {
+                console.log('Connected to server');
+                addDebugLog('Socket.IO connected');
+                updateLastUpdate();
+            });
+            
+            socket.on('data_update', function(data) {
+                console.log('Received data_update:', data);
+                addDebugLog('Data update received');
+                
+                // Handle both old format (direct device data) and new format (with devices key)
+                if (data.devices) {
+                    latestData = data.devices;
+                    addDebugLog(`New format: ${Object.keys(data.devices).length} devices`);
+                } else {
+                    latestData = data;
+                    addDebugLog(`Old format: ${Object.keys(data).length} devices`);
+                }
+                
+                updateSystemStatus();
+                updateDeviceList();
+                updateDataTable();
+                updateComparisonCharts();
+                update3PhaseCalculations();
+                
+                if (currentDevice && latestData[currentDevice]) {
+                    updateDetailChart();
+                }
+                updateLastUpdate();
+            });
+            
+            socket.on('disconnect', function() {
+                console.log('Disconnected from server');
+                addDebugLog('Socket.IO disconnected');
+            });
+        }
+
+        // Initialize all charts
+        function initializeCharts() {
+            // Voltage comparison chart
+            const voltageCtx = document.getElementById('voltageChart').getContext('2d');
+            voltageChart = new Chart(voltageCtx, {
+                type: 'line',
+                data: { labels: [], datasets: [] },
+                options: getComparisonChartOptions('Voltage (V)')
+            });
+
+            // Current comparison chart
+            const currentCtx = document.getElementById('currentChart').getContext('2d');
+            currentChart = new Chart(currentCtx, {
+                type: 'line',
+                data: { labels: [], datasets: [] },
+                options: getComparisonChartOptions('Current (A)')
+            });
+
+            // Power comparison chart
+            const powerCtx = document.getElementById('powerChart').getContext('2d');
+            powerChart = new Chart(powerCtx, {
+                type: 'line',
+                data: { labels: [], datasets: [] },
+                options: getComparisonChartOptions('Power (W)')
+            });
+
+            // Detail chart
+            const detailCtx = document.getElementById('detailChart').getContext('2d');
+            detailChart = new Chart(detailCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        {
+                            label: 'Power (W)',
+                            data: [],
+                            borderColor: '#e74c3c',
+                            backgroundColor: 'rgba(231, 76, 60, 0.1)',
+                            tension: 0.4,
+                            fill: true
+                        },
+                        {
+                            label: 'Voltage (V)',
+                            data: [],
+                            borderColor: '#3498db',
+                            backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                            tension: 0.4,
+                            yAxisID: 'y1'
+                        },
+                        {
+                            label: 'Current (A)',
+                            data: [],
+                            borderColor: '#27ae60',
+                            backgroundColor: 'rgba(39, 174, 96, 0.1)',
+                            tension: 0.4,
+                            yAxisID: 'y2'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { intersect: false, mode: 'index' },
+                    plugins: { legend: { position: 'top' } },
+                    scales: {
+                        x: { display: true, title: { display: true, text: 'Time' } },
+                        y: { type: 'linear', display: true, position: 'left', title: { display: true, text: 'Power (W)' } },
+                        y1: { type: 'linear', display: false, position: 'right', title: { display: true, text: 'Voltage (V)' }, grid: { drawOnChartArea: false } },
+                        y2: { type: 'linear', display: false, position: 'right', title: { display: true, text: 'Current (A)' }, grid: { drawOnChartArea: false } }
+                    }
+                }
+            });
+        }
+
+        function getComparisonChartOptions(yAxisTitle) {
+            return {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { intersect: false, mode: 'index' },
+                plugins: {
+                    legend: { position: 'top', labels: { usePointStyle: true, pointStyle: 'circle' } }
+                },
+                scales: {
+                    x: { display: true, title: { display: true, text: 'Time' } },
+                    y: { display: true, title: { display: true, text: yAxisTitle } }
+                }
+            };
+        }
+
+        // Load system status
+        async function loadSystemStatus() {
+            try {
+                const response = await fetch('/api/system-status');
+                const data = await response.json();
+                updateSystemStatusDisplay(data);
+                addDebugLog(`System status loaded: ${data.total_devices || 0} total, ${data.online_devices || 0} online`);
+            } catch (error) {
+                console.error('Error loading system status:', error);
+                addDebugLog(`Error loading system status: ${error.message}`);
+            }
+        }
+
+        // Update system status from live data
+        function updateSystemStatus() {
+            const deviceCount = Object.keys(latestData).length;
+            let onlineCount = 0;
+            let totalPower = 0;
+            let totalEnergy = 0;
+
+            addDebugLog(`Processing ${deviceCount} devices from latest data`);
+
+            Object.entries(latestData).forEach(([deviceAddress, device]) => {
+                if (!device || typeof device !== 'object') {
+                    addDebugLog(`Invalid device data for ${deviceAddress}`);
+                    return;
+                }
+                
+                // Better online status checking
+                let isOnline = false;
+                try {
+                    const timeStr = device.created_at_jakarta || device.created_at || device.timestamp_jakarta || device.timestamp_utc;
+                    
+                    if (timeStr) {
+                        const lastSeen = new Date(timeStr);
+                        
+                        if (!isNaN(lastSeen.getTime())) {
+                            const timeDiff = Date.now() - lastSeen.getTime();
+                            isOnline = timeDiff < (10 * 60 * 1000); // 10 minutes
+                        }
+                    }
+                } catch (error) {
+                    addDebugLog(`Error checking online status for ${deviceAddress}: ${error.message}`);
+                }
+                
+                if (isOnline) onlineCount++;
+                
+                // Use the correct field names
+                const power = parseFloat(device.power || device.avg_power || 0);
+                const energy = parseFloat(device.energy || device.energy_consumed || device.total_energy || 0);
+                
+                totalPower += power;
+                totalEnergy += energy;
+                
+                addDebugLog(`Device ${deviceAddress}: power=${power}W, energy=${energy}kWh, online=${isOnline}`);
+            });
+
+            const statusData = {
+                total_devices: deviceCount,
+                online_devices: onlineCount,
+                total_power: totalPower,
+                total_energy: totalEnergy
+            };
+
+            updateSystemStatusDisplay(statusData);
+            addDebugLog(`System status updated: ${onlineCount}/${deviceCount} online, ${totalPower.toFixed(1)}W, ${totalEnergy.toFixed(2)}kWh`);
+        }
+
+        // Update system status display
+        function updateSystemStatusDisplay(data) {
+            document.getElementById('totalDevices').textContent = data.total_devices || 0;
+            document.getElementById('onlineDevices').textContent = data.online_devices || 0;
+            document.getElementById('totalPower').textContent = `${(data.total_power || 0).toFixed(1)} W`;
+            document.getElementById('totalEnergy').textContent = `${(data.total_energy || 0).toFixed(2)} kWh`;
+        }
+
+        // Load devices
+        async function loadDevices() {
+            try {
+                const response = await fetch('/api/devices');
+                const devicesData = await response.json();
+                
+                addDebugLog(`Devices API response: ${devicesData.length} devices`);
+                
+                const deviceSelect = document.getElementById('deviceSelect');
+                deviceSelect.innerHTML = '<option value="">All Devices</option>';
+                
+                if (Array.isArray(devicesData)) {
+                    devices = devicesData;
+                    
+                    devices.forEach(device => {
+                        let deviceAddress, deviceName, dataCount;
+                        
+                        if (Array.isArray(device)) {
+                            deviceAddress = device[0];
+                            deviceName = device[1] || `Device ${device[0]}`;
+                            dataCount = device[2] || 0;
+                        } else {
+                            deviceAddress = device.device_address;
+                            deviceName = device.device_name || `Device ${device.device_address}`;
+                            dataCount = device.data_count || device.total_records || 0;
+                        }
+                        
+                        const option = document.createElement('option');
+                        option.value = deviceAddress;
+                        option.textContent = `${deviceName} (${dataCount} records)`;
+                        deviceSelect.appendChild(option);
+                        
+                        addDebugLog(`Added device option: ${deviceAddress} - ${deviceName}`);
+                    });
+                } else {
+                    addDebugLog('Invalid devices data format');
+                    deviceSelect.innerHTML = '<option value="">No devices found</option>';
+                }
+
+                await loadLatestData();
+                updateDeviceList();
+                updateDataTable();
+                updateComparisonCharts();
+                
+            } catch (error) {
+                console.error('Error loading devices:', error);
+                addDebugLog(`Error loading devices: ${error.message}`);
+                document.getElementById('deviceSelect').innerHTML = '<option value="">Error loading devices</option>';
+            }
+        }
+
+        // Load latest data for all devices
+        async function loadLatestData() {
+            try {
+                const response = await fetch('/api/all-latest');
+                const data = await response.json();
+                latestData = data || {};
+                addDebugLog(`Latest data loaded: ${Object.keys(latestData).length} devices`);
+            } catch (error) {
+                console.error('Error loading latest data:', error);
+                addDebugLog(`Error loading latest data: ${error.message}`);
+                latestData = {};
+            }
+        }
+
+        // Update comparison charts with all devices
+        async function updateComparisonCharts() {
+            try {
+                addDebugLog('Updating comparison charts...');
+                
+                // Show loading state
+                document.getElementById('voltageChart').style.opacity = '0.5';
+                document.getElementById('currentChart').style.opacity = '0.5';
+                document.getElementById('powerChart').style.opacity = '0.5';
+                
+                // Get data for all devices for comparison
+                const allDevicesData = await getAllDevicesChartData();
+                
+                if (allDevicesData.length === 0) {
+                    // Clear charts if no data
+                    [voltageChart, currentChart, powerChart].forEach(chart => {
+                        chart.data.labels = [];
+                        chart.data.datasets = [];
+                        chart.update('none'); // No animation for clearing
+                    });
+                    
+                    // Restore opacity
+                    document.getElementById('voltageChart').style.opacity = '1';
+                    document.getElementById('currentChart').style.opacity = '1';
+                    document.getElementById('powerChart').style.opacity = '1';
+                    
+                    return;
+                }
+
+                // Prepare common labels (time periods)
+                const allLabels = new Set();
+                allDevicesData.forEach(deviceData => {
+                    deviceData.data.forEach(item => {
+                        if (item.time_period) {
+                            allLabels.add(item.time_period);
+                        }
+                    });
+                });
+                
+                const commonLabels = Array.from(allLabels).sort();
+                
+                // Limit labels for performance (max 200 points)
+                if (commonLabels.length > 200) {
+                    const step = Math.ceil(commonLabels.length / 200);
+                    const limitedLabels = [];
+                    for (let i = 0; i < commonLabels.length; i += step) {
+                        limitedLabels.push(commonLabels[i]);
+                    }
+                    commonLabels.splice(0, commonLabels.length, ...limitedLabels);
+                    addDebugLog(`Limited comparison chart labels from ${allLabels.size} to ${commonLabels.length} points`);
+                }
+
+                // Prepare datasets for each chart
+                const voltageDatasets = [];
+                const currentDatasets = [];
+                const powerDatasets = [];
+                
+                allDevicesData.forEach((deviceData, index) => {
+                    const color = deviceColors[index % deviceColors.length];
+                    const deviceAddress = deviceData.device_address;
+                    
+                    // Create data maps for efficient lookup
+                    const dataMap = new Map();
+                    deviceData.data.forEach(item => {
+                        if (item.time_period) {
+                            dataMap.set(item.time_period, item);
+                        }
+                    });
+                    
+                    // Create aligned data arrays
+                    const voltageData = commonLabels.map(label => {
+                        const item = dataMap.get(label);
+                        return item ? parseFloat(item.voltage || 0) : null;
+                    });
+                    
+                    const currentData = commonLabels.map(label => {
+                        const item = dataMap.get(label);
+                        return item ? parseFloat(item.current || 0) : null;
+                    });
+                    
+                    const powerData = commonLabels.map(label => {
+                        const item = dataMap.get(label);
+                        return item ? parseFloat(item.power || 0) : null;
+                    });
+                    
+                    voltageDatasets.push({
+                        label: `Phase ${String.fromCharCode(82 + index)} (${deviceAddress})`, // R, S, T
+                        data: voltageData,
+                        borderColor: color,
+                        backgroundColor: color + '20',
+                        tension: 0.4,
+                        fill: false,
+                        pointRadius: commonLabels.length > 100 ? 0 : 2, // Hide points for dense data
+                        borderWidth: commonLabels.length > 100 ? 1 : 2
+                    });
+                    
+                    currentDatasets.push({
+                        label: `Phase ${String.fromCharCode(82 + index)} (${deviceAddress})`,
+                        data: currentData,
+                        borderColor: color,
+                        backgroundColor: color + '20',
+                        tension: 0.4,
+                        fill: false,
+                        pointRadius: commonLabels.length > 100 ? 0 : 2,
+                        borderWidth: commonLabels.length > 100 ? 1 : 2
+                    });
+                    
+                    powerDatasets.push({
+                        label: `Phase ${String.fromCharCode(82 + index)} (${deviceAddress})`,
+                        data: powerData,
+                        borderColor: color,
+                        backgroundColor: color + '20',
+                        tension: 0.4,
+                        fill: false,
+                        pointRadius: commonLabels.length > 100 ? 0 : 2,
+                        borderWidth: commonLabels.length > 100 ? 1 : 2
+                    });
+                });
+                
+                // Update charts with optimized settings
+                voltageChart.data.labels = commonLabels;
+                voltageChart.data.datasets = voltageDatasets;
+                voltageChart.update('none'); // No animation for performance
+                
+                currentChart.data.labels = commonLabels;
+                currentChart.data.datasets = currentDatasets;
+                currentChart.update('none');
+                
+                powerChart.data.labels = commonLabels;
+                powerChart.data.datasets = powerDatasets;
+                powerChart.update('none');
+                
+                // Restore opacity
+                document.getElementById('voltageChart').style.opacity = '1';
+                document.getElementById('currentChart').style.opacity = '1';
+                document.getElementById('powerChart').style.opacity = '1';
+                
+                addDebugLog(`Updated comparison charts with ${commonLabels.length} data points for ${allDevicesData.length} devices`);
+                
+            } catch (error) {
+                console.error('Error updating comparison charts:', error);
+                addDebugLog(`Error updating comparison charts: ${error.message}`);
+                
+                // Restore opacity on error
+                document.getElementById('voltageChart').style.opacity = '1';
+                document.getElementById('currentChart').style.opacity = '1';
+                document.getElementById('powerChart').style.opacity = '1';
+            }
+        }
+
+                powerChart.data.labels = commonLabels;
+                powerChart.data.datasets = powerDatasets;
+                powerChart.update();
+
+                addDebugLog(`Updated comparison charts with ${allDevicesData.length} devices`);
+                
+            } catch (error) {
+                console.error('Error updating comparison charts:', error);
+                addDebugLog(`Error updating comparison charts: ${error.message}`);
+            }
+        }
+
+        // Get chart data for all devices
+        async function getAllDevicesChartData() {
+            const deviceAddresses = Object.keys(latestData);
+            const allData = [];
+            
+            for (const deviceAddress of deviceAddresses.slice(0, 5)) { // Limit to 5 devices for readability
+                try {
+                    const response = await fetch(`/api/chart/${deviceAddress}?period=${currentPeriod}`);
+                    const data = await response.json();
+                    
+                    if (data && data.length > 0) {
+                        allData.push({
+                            device_address: deviceAddress,
+                            data: data
+                        });
+                    }
+                } catch (error) {
+                    addDebugLog(`Error loading chart data for device ${deviceAddress}: ${error.message}`);
+                }
+            }
+            
+            return allData;
+        }
+
+        // Update device list
+        function updateDeviceList() {
+            const container = document.getElementById('deviceListContainer');
+            
+            addDebugLog(`Updating device list with ${Object.keys(latestData).length} devices`);
+            
+            if (Object.keys(latestData).length === 0) {
+                container.innerHTML = `
+                    <div class="no-data">
+                        <i class="fas fa-exclamation-triangle"></i>
+                        <p>No device data available</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = '';
+            
+            Object.entries(latestData).forEach(([deviceAddress, data]) => {
+                if (!data || typeof data !== 'object') {
+                    addDebugLog(`Skipping invalid data for device ${deviceAddress}`);
+                    return;
+                }
+                
+                const deviceItem = document.createElement('div');
+                deviceItem.className = 'device-item';
+                if (deviceAddress === currentDevice) {
+                    deviceItem.classList.add('active');
+                }
+                
+                deviceItem.onclick = () => selectDevice(deviceAddress);
+                
+                // Better time parsing and online status logic
+                let isOnline = false;
+                
+                try {
+                    const timeStr = data.created_at_jakarta || data.created_at || data.timestamp_jakarta || data.timestamp_utc;
+                    
+                    if (timeStr) {
+                        const lastSeen = new Date(timeStr);
+                        
+                        if (!isNaN(lastSeen.getTime())) {
+                            const timeDiff = Date.now() - lastSeen.getTime();
+                            isOnline = timeDiff < (10 * 60 * 1000);
+                            
+                            addDebugLog(`Device ${deviceAddress}: last seen ${Math.floor(timeDiff/60000)} minutes ago, online=${isOnline}`);
+                        }
+                    }
+                } catch (error) {
+                    addDebugLog(`Device ${deviceAddress}: Error parsing timestamp - ${error.message}`);
+                }
+                
+                const power = parseFloat(data.power || data.avg_power || 0);
+                const voltage = parseFloat(data.voltage || data.avg_voltage || 0);
+                const current = parseFloat(data.current || data.avg_current || 0);
+                const energy = parseFloat(data.energy || data.energy_consumed || data.total_energy || 0);
+                
+                deviceItem.innerHTML = `
+                    <div class="device-name">
+                        <span class="status-indicator ${isOnline ? 'status-online' : 'status-offline'}"></span>
+                        Device ${deviceAddress}
+                    </div>
+                    <div class="device-stats">
+                        <div>Power: ${power.toFixed(1)} W</div>
+                        <div>Voltage: ${voltage.toFixed(1)} V</div>
+                        <div>Current: ${current.toFixed(2)} A</div>
+                        <div>Energy: ${energy.toFixed(2)} kWh</div>
+                    </div>
+                `;
+                
+                container.appendChild(deviceItem);
+                addDebugLog(`Added device list item: ${deviceAddress} - ${power}W, ${voltage}V, online=${isOnline}`);
+            });
+        }
+
+        // Select device
+        function selectDevice(deviceAddress) {
+            currentDevice = deviceAddress;
+            document.getElementById('deviceSelect').value = deviceAddress;
+            addDebugLog(`Selected device: ${deviceAddress}`);
+            updateDetailChart();
+            updateDeviceList();
+        }
+
+        // Update detail chart for selected device
+        async function updateDetailChart() {
+            if (!currentDevice) {
+                detailChart.data.labels = [];
+                detailChart.data.datasets[0].data = [];
+                detailChart.data.datasets[1].data = [];
+                detailChart.data.datasets[2].data = [];
+                detailChart.update('none');
+                return;
+            }
+            
+            try {
+                addDebugLog(`Loading detail chart data for ${currentDevice} (${currentPeriod})`);
+                
+                const response = await fetch(`/api/chart/${currentDevice}?period=${currentPeriod}`);
+                const data = await response.json();
+                
+                addDebugLog(`Detail chart data loaded: ${data.length} points`);
+                
+                // Downsample data for performance if too many points
+                let processedData = data;
+                if (data.length > 300) {
+                    const step = Math.ceil(data.length / 300);
+                    processedData = data.filter((_, index) => index % step === 0);
+                    addDebugLog(`Downsampled detail chart from ${data.length} to ${processedData.length} points`);
+                }
+                
+                const labels = processedData.map(item => {
+                    try {
+                        const date = new Date(item.time_period);
+                        if (!isNaN(date.getTime())) {
+                            return formatChartDate(date);
+                        }
+                        return 'Invalid Date';
+                    } catch (error) {
+                        return 'Error';
+                    }
+                });
+                
+                const powerData = processedData.map(item => parseFloat(item.power || 0));
+                const voltageData = processedData.map(item => parseFloat(item.voltage || 0));
+                const currentData = processedData.map(item => parseFloat(item.current || 0));
+                
+                // Optimize chart rendering for large datasets
+                const pointRadius = processedData.length > 100 ? 0 : 2;
+                const borderWidth = processedData.length > 100 ? 1 : 2;
+                
+                detailChart.data.datasets[0].pointRadius = pointRadius;
+                detailChart.data.datasets[0].borderWidth = borderWidth;
+                detailChart.data.datasets[1].pointRadius = pointRadius;
+                detailChart.data.datasets[1].borderWidth = borderWidth;
+                detailChart.data.datasets[2].pointRadius = pointRadius;
+                detailChart.data.datasets[2].borderWidth = borderWidth;
+                
+                detailChart.data.labels = labels;
+                detailChart.data.datasets[0].data = powerData;
+                detailChart.data.datasets[1].data = voltageData;
+                detailChart.data.datasets[2].data = currentData;
+                
+                detailChart.update('none'); // No animation for performance
+                
+                addDebugLog(`Detail chart updated with ${processedData.length} data points`);
+                
+            } catch (error) {
+                console.error('Error updating detail chart:', error);
+                addDebugLog(`Error updating detail chart: ${error.message}`);
+            }
+        }
+
+        // Update data table
+        function updateDataTable() {
+            const tbody = document.getElementById('dataTableBody');
+            
+            addDebugLog(`Updating data table with ${Object.keys(latestData).length} devices`);
+            
+            if (Object.keys(latestData).length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="8" class="no-data">No data available</td>
+                    </tr>
+                `;
+                return;
+            }
+            
+            tbody.innerHTML = '';
+            
+            const sortedDevices = Object.keys(latestData).sort((a, b) => {
+                try {
+                    const dataA = latestData[a];
+                    const dataB = latestData[b];
+                    
+                    const timeA = dataA.created_at_jakarta || dataA.created_at || dataA.timestamp_jakarta || dataA.timestamp_utc || 0;
+                    const timeB = dataB.created_at_jakarta || dataB.created_at || dataB.timestamp_jakarta || dataB.timestamp_utc || 0;
+                    
+                    const dateA = new Date(timeA);
+                    const dateB = new Date(timeB);
+                    
+                    return dateB - dateA;
+                } catch (error) {
+                    return 0;
+                }
+            });
+            
+            sortedDevices.slice(0, 20).forEach(deviceAddress => {
+                const data = latestData[deviceAddress];
+                if (!data || typeof data !== 'object') {
+                    return;
+                }
+                
+                const row = document.createElement('tr');
+                
+                let isOnline = false;
+                let displayTime = 'Unknown';
+                
+                try {
+                    const timeStr = data.created_at_jakarta || data.created_at || data.timestamp_jakarta || data.timestamp_utc;
+                    
+                    if (timeStr) {
+                        const lastSeen = new Date(timeStr);
+                        
+                        if (!isNaN(lastSeen.getTime())) {
+                            displayTime = formatDate(lastSeen);
+                            const timeDiff = Date.now() - lastSeen.getTime();
+                            isOnline = timeDiff < (10 * 60 * 1000);
+                        }
+                    }
+                } catch (error) {
+                    displayTime = 'Parse Error';
+                }
+                
+                const voltage = parseFloat(data.voltage || data.avg_voltage || 0);
+                const current = parseFloat(data.current || data.avg_current || 0);
+                const power = parseFloat(data.power || data.avg_power || 0);
+                const energy = parseFloat(data.energy || data.energy_consumed || data.total_energy || 0);
+                const powerFactor = parseFloat(data.power_factor || 0.9);
+                
+                row.innerHTML = `
+                    <td>Device ${deviceAddress}</td>
+                    <td>${displayTime}</td>
+                    <td>${voltage.toFixed(1)}</td>
+                    <td>${current.toFixed(2)}</td>
+                    <td>${power.toFixed(1)}</td>
+                    <td>${energy.toFixed(2)}</td>
+                    <td>${powerFactor.toFixed(2)}</td>
+                    <td>
+                        <span class="status-indicator ${isOnline ? 'status-online' : 'status-offline'}"></span>
+                        ${isOnline ? 'Online' : 'Offline'}
+                    </td>
+                `;
+                
+                tbody.appendChild(row);
+            });
+        }
+
+        // Event handlers
+        function onDeviceChange() {
+            currentDevice = document.getElementById('deviceSelect').value;
+            addDebugLog(`Device changed to: ${currentDevice || 'All Devices'}`);
+            updateDetailChart();
+            updateDeviceList();
+        }
+
+        function onPeriodChange() {
+            currentPeriod = document.getElementById('periodSelect').value;
+            addDebugLog(`Period changed to: ${currentPeriod}`);
+            updateComparisonCharts();
+            if (currentDevice) {
+                updateDetailChart();
+            }
+        }
+
+        // Refresh all data
+        async function refreshData() {
+            addDebugLog('Manual refresh triggered');
+            await loadSystemStatus();
+            await loadDevices();
+            updateComparisonCharts();
+            update3PhaseCalculations();
+            if (currentDevice) {
+                await updateDetailChart();
+            }
+            updateLastUpdate();
+        }
+
+        // Utility functions
+        function formatDate(date) {
+            return date.toLocaleString('id-ID', {
+                timeZone: 'Asia/Jakarta',
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+        }
+
+        function formatChartDate(date) {
+            return date.toLocaleString('id-ID', {
+                timeZone: 'Asia/Jakarta',
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        }
+
+        function updateLastUpdate() {
+            const now = new Date();
+            const jakartaTime = now.toLocaleString('id-ID', {
+                timeZone: 'Asia/Jakarta',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+            document.getElementById('lastUpdate').textContent = `Last update: ${jakartaTime} WIB`;
+        }
+    </script>
+</body>
+</html>

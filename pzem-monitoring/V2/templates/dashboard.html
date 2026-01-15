@@ -1,0 +1,861 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PZEM Energy Monitoring Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 1rem 2rem;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+
+        .header-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        .logo {
+            font-size: 1.8rem;
+            font-weight: bold;
+            color: #667eea;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .logo::before {
+            content: "⚡";
+            font-size: 2rem;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.9rem;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #4CAF50;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(76, 175, 80, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0); }
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 1.5rem;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
+        }
+
+        .stat-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 1rem;
+        }
+
+        .stat-title {
+            font-size: 0.9rem;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 600;
+        }
+
+        .stat-icon {
+            font-size: 1.5rem;
+            opacity: 0.7;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-unit {
+            font-size: 0.9rem;
+            color: #888;
+        }
+
+        .controls {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .controls-row {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .control-group label {
+            font-size: 0.85rem;
+            color: #666;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .select-input, .btn {
+            padding: 0.75rem 1rem;
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+            background: white;
+        }
+
+        .select-input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 2rem;
+        }
+
+        .chart-container, .table-container {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 1.5rem;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .section-title {
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .chart-wrapper {
+            position: relative;
+            height: 400px;
+            margin-bottom: 1rem;
+        }
+
+        .table-wrapper {
+            overflow-x: auto;
+            border-radius: 12px;
+            border: 1px solid #e0e0e0;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+
+        th, td {
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        th {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-size: 0.8rem;
+        }
+
+        tr:hover {
+            background: rgba(102, 126, 234, 0.05);
+        }
+
+        .device-badge {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 200px;
+            color: #666;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #f0f0f0;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 1rem;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+            border-bottom: 2px solid #f0f0f0;
+        }
+
+        .tab {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            background: none;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: #666;
+            border-bottom: 2px solid transparent;
+            transition: all 0.3s ease;
+        }
+
+        .tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+        }
+
+        .tab:hover {
+            color: #667eea;
+        }
+
+        @media (max-width: 768px) {
+            .header-content {
+                flex-direction: column;
+                text-align: center;
+            }
+
+            .controls-row {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .no-data {
+            text-align: center;
+            color: #666;
+            font-style: italic;
+            padding: 2rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-content">
+            <div class="logo">PZEM Monitor</div>
+            <div class="status-indicator">
+                <div class="status-dot"></div>
+                <span id="connectionStatus">Connected</span>
+                <span id="lastUpdate">Last updated: Never</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Statistics Cards -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-header">
+                    <div class="stat-title">Total Devices</div>
+                    <div class="stat-icon">🔌</div>
+                </div>
+                <div class="stat-value" id="totalDevices">-</div>
+                <div class="stat-unit">devices</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-header">
+                    <div class="stat-title">Online Devices</div>
+                    <div class="stat-icon">🟢</div>
+                </div>
+                <div class="stat-value" id="onlineDevices">-</div>
+                <div class="stat-unit">active</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-header">
+                    <div class="stat-title">Total Power</div>
+                    <div class="stat-icon">⚡</div>
+                </div>
+                <div class="stat-value" id="totalPower">-</div>
+                <div class="stat-unit">W</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-header">
+                    <div class="stat-title">Total Energy</div>
+                    <div class="stat-icon">🔋</div>
+                </div>
+                <div class="stat-value" id="totalEnergy">-</div>
+                <div class="stat-unit">kWh</div>
+            </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="controls">
+            <div class="controls-row">
+                <div class="control-group">
+                    <label>Device</label>
+                    <select id="deviceSelect" class="select-input">
+                        <option value="all">All Devices</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label>Time Period</label>
+                    <select id="periodSelect" class="select-input">
+                        <option value="hour">Last Hour</option>
+                        <option value="day">Last 24 Hours</option>
+                        <option value="week">Last Week</option>
+                        <option value="month">Last Month</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label>&nbsp;</label>
+                    <button id="refreshBtn" class="btn">Refresh Data</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Dashboard Grid -->
+        <div class="dashboard-grid">
+            <!-- Charts Section -->
+            <div class="chart-container">
+                <div class="section-title">
+                    📊 Energy Consumption Charts
+                </div>
+                
+                <div class="tabs">
+                    <button class="tab active" data-chart="power">Power (W)</button>
+                    <button class="tab" data-chart="voltage">Voltage (V)</button>
+                    <button class="tab" data-chart="current">Current (A)</button>
+                    <button class="tab" data-chart="energy">Energy (kWh)</button>
+                </div>
+
+                <div class="chart-wrapper">
+                    <canvas id="mainChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Data Table -->
+            <div class="table-container">
+                <div class="section-title">
+                    📋 Latest Readings
+                </div>
+                
+                <div class="table-wrapper">
+                    <table id="dataTable">
+                        <thead>
+                            <tr>
+                                <th>Device</th>
+                                <th>Time</th>
+                                <th>Voltage (V)</th>
+                                <th>Current (A)</th>
+                                <th>Power (W)</th>
+                                <th>Energy (kWh)</th>
+                                <th>Power Factor</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td colspan="8" class="loading">
+                                    <div class="spinner"></div>
+                                    Loading data...
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let mainChart = null;
+        let currentChartType = 'power';
+        let socket = null;
+        let chartData = {};
+        let devices = [];
+        let isConnected = false;
+
+        // Initialize dashboard
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeChart();
+            initializeEventListeners();
+            initializeWebSocket();
+            loadDevices();
+            loadSystemStatus();
+            loadChartData();
+            loadTableData();
+
+            // Auto refresh every 30 seconds
+            setInterval(() => {
+                loadSystemStatus();
+                loadChartData();
+                loadTableData();
+            }, 30000);
+        });
+
+        // Initialize Chart.js
+        function initializeChart() {
+            const ctx = document.getElementById('mainChart').getContext('2d');
+            mainChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: []
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        intersect: false,
+                        mode: 'index'
+                    },
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                            labels: {
+                                usePointStyle: true,
+                                pointStyle: 'circle'
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                            titleColor: '#333',
+                            bodyColor: '#666',
+                            borderColor: '#667eea',
+                            borderWidth: 1,
+                            cornerRadius: 8,
+                            displayColors: true
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                displayFormats: {
+                                    minute: 'HH:mm',
+                                    hour: 'HH:mm',
+                                    day: 'MMM DD',
+                                    week: 'MMM DD',
+                                    month: 'MMM YYYY'
+                                }
+                            },
+                            grid: {
+                                display: true,
+                                color: 'rgba(0, 0, 0, 0.1)'
+                            }
+                        },
+                        y: {
+                            beginAtZero: true,
+                            grid: {
+                                display: true,
+                                color: 'rgba(0, 0, 0, 0.1)'
+                            }
+                        }
+                    },
+                    elements: {
+                        line: {
+                            tension: 0.4,
+                            borderWidth: 2
+                        },
+                        point: {
+                            radius: 3,
+                            hoverRadius: 6
+                        }
+                    }
+                }
+            });
+        }
+
+        // Initialize event listeners
+        function initializeEventListeners() {
+            // Tab switching
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.addEventListener('click', function() {
+                    document.querySelector('.tab.active').classList.remove('active');
+                    this.classList.add('active');
+                    currentChartType = this.dataset.chart;
+                    updateChart();
+                });
+            });
+
+            // Control changes
+            document.getElementById('deviceSelect').addEventListener('change', loadChartData);
+            document.getElementById('periodSelect').addEventListener('change', loadChartData);
+            document.getElementById('refreshBtn').addEventListener('click', function() {
+                loadSystemStatus();
+                loadChartData();
+                loadTableData();
+            });
+        }
+
+        // Initialize WebSocket connection
+        function initializeWebSocket() {
+            try {
+                socket = io();
+                
+                socket.on('connect', function() {
+                    console.log('Connected to server');
+                    isConnected = true;
+                    updateConnectionStatus('Connected', true);
+                });
+
+                socket.on('disconnect', function() {
+                    console.log('Disconnected from server');
+                    isConnected = false;
+                    updateConnectionStatus('Disconnected', false);
+                });
+
+                socket.on('data_update', function(data) {
+                    console.log('Received data update:', data);
+                    updateLastUpdateTime();
+                    // Refresh data when real-time update received
+                    loadSystemStatus();
+                    loadTableData();
+                });
+
+                socket.on('connected', function(data) {
+                    console.log('Server message:', data);
+                });
+
+            } catch (error) {
+                console.error('WebSocket connection error:', error);
+                isConnected = false;
+                updateConnectionStatus('Disconnected', false);
+            }
+        }
+
+        // Update connection status
+        function updateConnectionStatus(status, connected) {
+            const statusElement = document.getElementById('connectionStatus');
+            const statusDot = document.querySelector('.status-dot');
+            
+            statusElement.textContent = status;
+            statusDot.style.background = connected ? '#4CAF50' : '#f44336';
+        }
+
+        // Update last update time
+        function updateLastUpdateTime() {
+            const lastUpdateElement = document.getElementById('lastUpdate');
+            const now = new Date();
+            lastUpdateElement.textContent = `Last updated: ${now.toLocaleTimeString()}`;
+        }
+
+        // Load system status
+        function loadSystemStatus() {
+            fetch('/api/system-status')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('totalDevices').textContent = data.total_devices;
+                    document.getElementById('onlineDevices').textContent = data.online_devices;
+                    document.getElementById('totalPower').textContent = data.total_power;
+                    document.getElementById('totalEnergy').textContent = data.total_energy;
+                })
+                .catch(error => {
+                    console.error('Error loading system status:', error);
+                });
+        }
+
+        // Load devices list
+        function loadDevices() {
+            fetch('/api/devices')
+                .then(response => response.json())
+                .then(data => {
+                    const deviceSelect = document.getElementById('deviceSelect');
+                    
+                    // Clear existing options (except "All Devices")
+                    while (deviceSelect.children.length > 1) {
+                        deviceSelect.removeChild(deviceSelect.lastChild);
+                    }
+
+                    // Add device options
+                    data.forEach(device => {
+                        const option = document.createElement('option');
+                        option.value = device[0];
+                        option.textContent = `${device[0]} (${device[1]} readings)`;
+                        deviceSelect.appendChild(option);
+                    });
+
+                    devices = data;
+                })
+                .catch(error => {
+                    console.error('Error loading devices:', error);
+                });
+        }
+
+        // Load chart data
+        function loadChartData() {
+            const selectedDevice = document.getElementById('deviceSelect').value;
+            const selectedPeriod = document.getElementById('periodSelect').value;
+
+            if (selectedDevice === 'all') {
+                // Load combined data from all devices
+                const promises = devices.map(device => {
+                    const deviceAddress = device[0];
+                    return fetch(`/api/chart/${deviceAddress}?period=${selectedPeriod}`)
+                        .then(response => response.json());
+                });
+
+                Promise.all(promises)
+                    .then(results => {
+                        chartData = {
+                            labels: [],
+                            power: {},
+                            voltage: {},
+                            current: {},
+                            energy: {}
+                        };
+
+                        results.forEach((deviceData, index) => {
+                            const deviceAddress = devices[index][0];
+                            
+                            chartData.power[deviceAddress] = [];
+                            chartData.voltage[deviceAddress] = [];
+                            chartData.current[deviceAddress] = [];
+                            chartData.energy[deviceAddress] = [];
+
+                            deviceData.forEach(record => {
+                                if (index === 0) { // Only add labels once
+                                    chartData.labels.push(new Date(record.time_period));
+                                }
+                                chartData.power[deviceAddress].push(parseFloat(record.power) || 0);
+                                chartData.voltage[deviceAddress].push(parseFloat(record.voltage) || 0);
+                                chartData.current[deviceAddress].push(parseFloat(record.current) || 0);
+                                chartData.energy[deviceAddress].push(parseFloat(record.energy) || 0);
+                            });
+                        });
+
+                        updateChart();
+                    })
+                    .catch(error => {
+                        console.error('Error loading combined chart data:', error);
+                    });
+            } else {
+                // Load single device data
+                fetch(`/api/chart/${selectedDevice}?period=${selectedPeriod}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        chartData = {
+                            labels: [],
+                            power: {},
+                            voltage: {},
+                            current: {},
+                            energy: {}
+                        };
+
+                        chartData.power[selectedDevice] = [];
+                        chartData.voltage[selectedDevice] = [];
+                        chartData.current[selectedDevice] = [];
+                        chartData.energy[selectedDevice] = [];
+
+                        data.forEach(record => {
+                            chartData.labels.push(new Date(record.time_period));
+                            chartData.power[selectedDevice].push(parseFloat(record.power) || 0);
+                            chartData.voltage[selectedDevice].push(parseFloat(record.voltage) || 0);
+                            chartData.current[selectedDevice].push(parseFloat(record.current) || 0);
+                            chartData.energy[selectedDevice].push(parseFloat(record.energy) || 0);
+                        });
+
+                        updateChart();
+                    })
+                    .catch(error => {
+                        console.error('Error loading single device chart data:', error);
+                    });
+            }
+        }
+
+        // Update chart based on current selection
+        function updateChart() {
+            if (!mainChart || !chartData[currentChartType]) return;
+
+            const datasets = [];
+            const colors = [
+                '#667eea', '#764ba2', '#f093fb', '#f5576c',
+                '#4ecdc4', '#44a08d', '#ffecd2', '#fcb69f'
+            ];
+
+            let colorIndex = 0;
+            for (const deviceAddr in chartData[currentChartType]) {
+                datasets.push({
+                    label: deviceAddr,
+                    data: chartData.labels.map((time, index) => ({
+                        x: time,
+                        y: chartData[currentChartType][deviceAddr][index] || 0
+                    })),
+                    borderColor: colors[colorIndex % colors.length],
+                    backgroundColor: colors[colorIndex % colors.length] + '20',
+                    fill: false,
+                    tension: 0.4
+                });
+                colorIndex++;
+            }
+
+            mainChart.data.labels = chartData.labels;
+            mainChart.data.datasets = datasets;
+
+            // Update Y-axis label
+            const yAxisTitle = {
+                'power': 'Power (W)',
+                'voltage': 'Voltage (V)',
+                'current': 'Current (A)',
+                'energy': 'Energy (kWh)'
+            };
+
+            mainChart.options.scales.y.title = {
+                display: true,
+                text: yAxisTitle[currentChartType]
+            };
+
+            mainChart.update();
+        }
+
+        // Load table data
+        function loadTableData() {
+            fetch('/api/all-latest')
+                .then(response => response.json())
+                .then(data => {
+                    const tbody = document.querySelector('#dataTable tbody');
+                    tbody.innerHTML = '';
+
+                    if (Object.keys(data).length === 0) {
+                        const row = document.createElement('tr');
+                        row.innerHTML = '<td colspan="8" class="no-data">No data available</td>';
+                        tbody.appendChild(row);
+                        return;
+                    }
+
+                    Object.entries(data).forEach(([deviceAddr, deviceData]) => {
+                        const row = document.createElement('tr');
+                        const createdAt = new Date(deviceData.created_at);
+                        const isOnline = (Date.now() - createdAt.getTime()) < 10 * 60 * 1000; // 10 minutes
+                        
+                        row.innerHTML = `
+                            <td><span class="device-badge">${deviceAddr}</span></td>
+                            <td>${createdAt.toLocaleString()}</td>
+                            <td>${(deviceData.current_voltage || deviceData.avg_voltage || 0).toFixed(1)}</td>
+                            <td>${(deviceData.current_current || deviceData.avg_current || 0).toFixed(2)}</td>
+                            <td>${(deviceData.current_active_power || deviceData.avg_power || 0).toFixed(1)}</td>
+                            <td>${(deviceData.current_active_energy || deviceData.total_energy || 0).toFixed(2)}</td>
+                            <td>${(deviceData.current_power_factor || 0).toFixed(2)}</td>
+                            <td><span style="color: ${isOnline ? '#4CAF50' : '#f44336'};">●</span> ${isOnline ? 'Online' : 'Offline'}</td>
+                        `;
+                        tbody.appendChild(row);
+                    });
+                })
+                .catch(error => {
+                    console.error('Error loading table data:', error);
+                    const tbody = document.querySelector('#dataTable tbody');
+                    tbody.innerHTML = '<tr><td colspan="8" class="no-data">Error loading data</td></tr>';
+                });
+        }
+    </script>
+</body>
+</html>

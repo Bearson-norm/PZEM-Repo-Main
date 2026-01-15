@@ -1,0 +1,62 @@
+name: Example Test Workflow
+
+# This is an example workflow for testing
+# You can use this as a template for custom tests
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-example:
+    name: Example Test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Test PLN Calculator
+      run: |
+        cd dashboard
+        python3 -c "
+        from pln_calculator import PLNTariffCalculator, calculate_pln_bill
+        
+        # Test R1
+        bill = calculate_pln_bill(energy_kwh=1200, tariff_class='R1')
+        assert bill['total_bill_idr'] > 0, 'Total bill should be positive'
+        print(f'✅ R1 test passed: Rp {bill[\"total_bill_idr\"]:,.0f}')
+        
+        # Test R2
+        bill2 = calculate_pln_bill(energy_kwh=1000, tariff_class='R2')
+        assert bill2['total_bill_idr'] > 0, 'Total bill should be positive'
+        print(f'✅ R2 test passed: Rp {bill2[\"total_bill_idr\"]:,.0f}')
+        
+        # Test B2
+        bill3 = calculate_pln_bill(energy_kwh=500, tariff_class='B2')
+        assert bill3['total_bill_idr'] > 0, 'Total bill should be positive'
+        print(f'✅ B2 test passed: Rp {bill3[\"total_bill_idr\"]:,.0f}')
+        
+        print('✅ All PLN calculator tests passed!')
+        "
+
+    - name: Test Report Generator
+      run: |
+        cd dashboard
+        python3 -c "
+        from report_generator import ThreePhaseCalculator
+        
+        # Test PLN billing calculation
+        result = ThreePhaseCalculator.calculate_pln_billing(
+            total_energy_kwh=1200.0,
+            tariff_class='R1'
+        )
+        
+        assert result['total_bill_idr'] > 0, 'Total bill should be positive'
+        assert result['energy_kwh'] == 1200.0, 'Energy should match'
+        assert result['tariff_class'] == 'R1', 'Tariff class should match'
+        
+        print(f'✅ Report generator test passed')
+        print(f'   Energy: {result[\"energy_kwh\"]} kWh')
+        print(f'   Total Bill: Rp {result[\"total_bill_idr\"]:,.0f}')
+        "
+

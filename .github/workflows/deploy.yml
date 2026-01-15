@@ -1,0 +1,245 @@
+name: CD - Deploy to Production VPS
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'pzem-monitoring/V9-Docker/**'
+      - '.github/workflows/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+
+env:
+  VPS_USER: foom
+  VPS_HOST: ${{ secrets.VPS_HOST || '103.31.39.189' }}
+  VPS_DEPLOY_DIR: /opt/pzem-monitoring
+  PROJECT_DIR: pzem-monitoring/V9-Docker
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup SSH
+      uses: webfactory/ssh-agent@v0.9.0
+      with:
+        ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
+
+    - name: Add VPS to known hosts
+      run: |
+        mkdir -p ~/.ssh
+        ssh-keyscan -H ${{ env.VPS_HOST }} >> ~/.ssh/known_hosts
+        chmod 600 ~/.ssh/known_hosts
+
+    - name: Create deployment package
+      run: |
+        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        PACKAGE_NAME="pzem-monitoring-deploy-${TIMESTAMP}.tar.gz"
+        
+        # Create package from V9-Docker directory
+        cd ${PROJECT_DIR}
+        tar -czf ../../${PACKAGE_NAME} \
+          dashboard/ \
+          mqtt/ \
+          docker-compose.yml \
+          start.sh \
+          nginx-pzem.conf \
+          setup-nginx-ssl.sh \
+          *.md \
+          --exclude='*.pyc' \
+          --exclude='__pycache__' \
+          --exclude='*.log' \
+          --exclude='*.pdf' \
+          --exclude='*.zip' \
+          --exclude='*.tar.gz'
+        
+        cd ../..
+        echo "PACKAGE_NAME=${PACKAGE_NAME}" >> $GITHUB_ENV
+        echo "✅ Package created: ${PACKAGE_NAME}"
+
+    - name: Upload package to VPS
+      run: |
+        scp -o StrictHostKeyChecking=no ${PACKAGE_NAME} ${{ env.VPS_USER }}@${{ env.VPS_HOST }}:/tmp/
+        echo "✅ Package uploaded to VPS"
+
+    - name: Create remote deployment script
+      run: |
+        cat > /tmp/remote-deploy.sh << 'REMOTE_SCRIPT'
+        #!/bin/bash
+        set -e
+        
+        VPS_DEPLOY_DIR="/opt/pzem-monitoring"
+        BACKUP_DIR="/opt/backups/pzem-monitoring"
+        PACKAGE_FILE=$(ls /tmp/pzem-monitoring-deploy-*.tar.gz | head -1)
+        
+        # Detect docker-compose
+        if command -v docker-compose &> /dev/null; then
+          DOCKER_COMPOSE="docker-compose"
+        elif docker compose version &> /dev/null; then
+          DOCKER_COMPOSE="docker compose"
+        else
+          echo "❌ ERROR: docker-compose not found"
+          exit 1
+        fi
+        
+        echo "🔧 Starting deployment to ${VPS_DEPLOY_DIR}..."
+        
+        # Backup existing (if exists)
+        if [ -d "${VPS_DEPLOY_DIR}" ]; then
+          echo "📦 Creating backup..."
+          mkdir -p "${BACKUP_DIR}"
+          
+          if [ -f "${VPS_DEPLOY_DIR}/docker-compose.yml" ]; then
+            cd "${VPS_DEPLOY_DIR}"
+            
+            # Backup database if container running
+            if docker ps | grep -q "pzem-monitoring.*db\|.*db.*pzem"; then
+              DB_CONTAINER=$(docker ps | grep -E "pzem-monitoring.*db|.*db.*pzem" | awk '{print $1}' | head -1)
+              if [ -n "$DB_CONTAINER" ]; then
+                echo "💾 Backing up database..."
+                docker exec ${DB_CONTAINER} pg_dump -U postgres pzem_monitoring > "${BACKUP_DIR}/database_backup_$(date +%Y%m%d_%H%M%S).sql" 2>/dev/null || true
+                echo "✅ Database backup completed"
+              fi
+            fi
+            
+            # Backup .env
+            if [ -f "${VPS_DEPLOY_DIR}/.env" ]; then
+              cp "${VPS_DEPLOY_DIR}/.env" "${BACKUP_DIR}/.env.backup.$(date +%Y%m%d_%H%M%S)"
+              echo "✅ .env backed up"
+            fi
+            
+            # Stop services (preserve volumes)
+            echo "🛑 Stopping services..."
+            $DOCKER_COMPOSE down 2>/dev/null || true
+            sleep 5
+          fi
+          
+          # Backup directory
+          BACKUP_NAME="${VPS_DEPLOY_DIR}_backup_$(date +%Y%m%d_%H%M%S)"
+          echo "📦 Backing up directory to ${BACKUP_NAME}..."
+          mv "${VPS_DEPLOY_DIR}" "${BACKUP_NAME}" || true
+        fi
+        
+        # Extract new package
+        echo "📦 Extracting package..."
+        mkdir -p "${VPS_DEPLOY_DIR}"
+        cd "${VPS_DEPLOY_DIR}"
+        tar -xzf "${PACKAGE_FILE}"
+        
+        # Restore .env if exists
+        if [ -f "${BACKUP_DIR}/.env.backup."* ]; then
+          LATEST_ENV=$(ls -t "${BACKUP_DIR}/.env.backup."* | head -1)
+          cp "${LATEST_ENV}" "${VPS_DEPLOY_DIR}/.env"
+          echo "✅ .env restored from backup"
+        else
+          echo "⚠️  No .env backup found - using default configuration"
+        fi
+        
+        # Make scripts executable
+        chmod +x ${VPS_DEPLOY_DIR}/*.sh 2>/dev/null || true
+        
+        # Build and start
+        echo "🔨 Building containers..."
+        cd "${VPS_DEPLOY_DIR}"
+        $DOCKER_COMPOSE build --no-cache
+        
+        echo "🚀 Starting services..."
+        $DOCKER_COMPOSE up -d
+        
+        # Wait for services
+        echo "⏳ Waiting for services to start..."
+        sleep 20
+        
+        # Verify database
+        echo "🔍 Verifying database..."
+        MAX_RETRIES=30
+        RETRY_COUNT=0
+        DB_READY=false
+        
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+          if $DOCKER_COMPOSE exec -T db pg_isready -U postgres > /dev/null 2>&1; then
+            DB_READY=true
+            break
+          fi
+          RETRY_COUNT=$((RETRY_COUNT + 1))
+          echo "   Waiting for database... ($RETRY_COUNT/$MAX_RETRIES)"
+          sleep 2
+        done
+        
+        if [ "$DB_READY" = true ]; then
+          echo "✅ Database is ready"
+        else
+          echo "❌ Database did not become ready"
+          exit 1
+        fi
+        
+        # Health check
+        echo "🏥 Health check..."
+        sleep 10
+        if curl -f -s http://localhost:5000/health > /dev/null 2>&1 || curl -f -s http://localhost:5000/ > /dev/null 2>&1; then
+          echo "✅ Health check passed"
+        else
+          echo "⚠️  Health check failed (service may still be starting)"
+        fi
+        
+        # Cleanup
+        rm -f "${PACKAGE_FILE}"
+        
+        echo "✅ Deployment completed successfully!"
+        echo "📍 Location: ${VPS_DEPLOY_DIR}"
+        REMOTE_SCRIPT
+        
+        scp -o StrictHostKeyChecking=no /tmp/remote-deploy.sh ${{ env.VPS_USER }}@${{ env.VPS_HOST }}:/tmp/
+
+    - name: Execute deployment on VPS
+      run: |
+        ssh -o StrictHostKeyChecking=no ${{ env.VPS_USER }}@${{ env.VPS_HOST }} "chmod +x /tmp/remote-deploy.sh && bash /tmp/remote-deploy.sh"
+
+    - name: Verify deployment
+      run: |
+        ssh -o StrictHostKeyChecking=no ${{ env.VPS_USER }}@${{ env.VPS_HOST }} << 'EOF'
+          cd ${{ env.VPS_DEPLOY_DIR }}
+          echo "📊 Service Status:"
+          if command -v docker-compose &> /dev/null; then
+            docker-compose ps
+          elif docker compose version &> /dev/null; then
+            docker compose ps
+          fi
+          echo ""
+          echo "🐳 Running containers:"
+          docker ps --filter "name=pzem" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+        EOF
+
+    - name: Cleanup local files
+      if: always()
+      run: |
+        rm -f ${PACKAGE_NAME}
+        rm -f /tmp/remote-deploy.sh
+
+    - name: Deployment summary
+      if: always()
+      run: |
+        echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Branch**: ${{ github.ref }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **VPS**: ${{ env.VPS_USER }}@${{ env.VPS_HOST }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Deploy Path**: ${{ env.VPS_DEPLOY_DIR }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Access URLs" >> $GITHUB_STEP_SUMMARY
+        echo "- Dashboard: http://${{ env.VPS_HOST }}:5000" >> $GITHUB_STEP_SUMMARY
+        echo "- Health: http://${{ env.VPS_HOST }}:5000/health" >> $GITHUB_STEP_SUMMARY

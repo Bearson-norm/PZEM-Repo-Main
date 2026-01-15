@@ -1,0 +1,40 @@
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: pzem_monitoring
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: Admin123
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  dashboard:
+    build: ./dashboard
+    ports:
+      - "5000:5000"
+    depends_on:
+      - db
+    environment:
+      - DB_HOST=db
+      - DB_NAME=pzem_monitoring
+      - DB_USER=postgres
+      - DB_PASS=Admin123
+    volumes:
+      - ./dashboard:/app
+      - reports_data:/app/reports
+
+  mqtt-listener:
+    build: ./mqtt
+    depends_on:
+      - db
+    environment:
+      - DB_HOST=db
+      - DB_NAME=pzem_monitoring
+      - DB_USER=postgres
+      - DB_PASS=Admin123
+    volumes:
+      - ./mqtt:/app
+
+volumes:
+  pgdata:
+  reports_data:
