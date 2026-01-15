@@ -134,7 +134,8 @@ jobs:
         set -e
         
         VPS_DEPLOY_DIR="/opt/pzem-monitoring"
-        BACKUP_DIR="/opt/backups/pzem-monitoring"
+        # Use home directory for backups (user has permission there)
+        BACKUP_DIR="${HOME}/.pzem-backups"
         PACKAGE_FILE=$(ls /tmp/pzem-monitoring-deploy-*.tar.gz | head -1)
         
         # Detect docker-compose
@@ -152,24 +153,32 @@ jobs:
         # Backup existing (if exists)
         if [ -d "${VPS_DEPLOY_DIR}" ]; then
           echo "📦 Creating backup..."
-          mkdir -p "${BACKUP_DIR}"
+          # Create backup directory (use home directory to avoid permission issues)
+          mkdir -p "${BACKUP_DIR}" || {
+            echo "⚠️  Warning: Cannot create backup directory ${BACKUP_DIR}, trying alternative location..."
+            BACKUP_DIR="${VPS_DEPLOY_DIR}/.backups"
+            mkdir -p "${BACKUP_DIR}" || {
+              echo "⚠️  Warning: Cannot create backup directory, skipping backup..."
+              BACKUP_DIR=""
+            }
+          }
           
           if [ -f "${VPS_DEPLOY_DIR}/docker-compose.yml" ]; then
             cd "${VPS_DEPLOY_DIR}"
             
-            # Backup database if container running
-            if docker ps | grep -q "pzem-monitoring.*db\|.*db.*pzem"; then
+            # Backup database if container running and backup directory exists
+            if [ -n "${BACKUP_DIR}" ] && docker ps | grep -q "pzem-monitoring.*db\|.*db.*pzem"; then
               DB_CONTAINER=$(docker ps | grep -E "pzem-monitoring.*db|.*db.*pzem" | awk '{print $1}' | head -1)
               if [ -n "$DB_CONTAINER" ]; then
                 echo "💾 Backing up database..."
-                docker exec ${DB_CONTAINER} pg_dump -U postgres pzem_monitoring > "${BACKUP_DIR}/database_backup_$(date +%Y%m%d_%H%M%S).sql" 2>/dev/null || true
+                docker exec ${DB_CONTAINER} pg_dump -U postgres pzem_monitoring > "${BACKUP_DIR}/database_backup_$(date +%Y%m%d_%H%M%S).sql" 2>/dev/null || echo "⚠️  Database backup failed (non-critical)"
                 echo "✅ Database backup completed"
               fi
             fi
             
-            # Backup .env
-            if [ -f "${VPS_DEPLOY_DIR}/.env" ]; then
-              cp "${VPS_DEPLOY_DIR}/.env" "${BACKUP_DIR}/.env.backup.$(date +%Y%m%d_%H%M%S)"
+            # Backup .env if backup directory exists
+            if [ -n "${BACKUP_DIR}" ] && [ -f "${VPS_DEPLOY_DIR}/.env" ]; then
+              cp "${VPS_DEPLOY_DIR}/.env" "${BACKUP_DIR}/.env.backup.$(date +%Y%m%d_%H%M%S)" || echo "⚠️  .env backup failed (non-critical)"
               echo "✅ .env backed up"
             fi
             
@@ -191,11 +200,15 @@ jobs:
         cd "${VPS_DEPLOY_DIR}"
         tar -xzf "${PACKAGE_FILE}"
         
-        # Restore .env if exists
-        if [ -f "${BACKUP_DIR}/.env.backup."* ]; then
-          LATEST_ENV=$(ls -t "${BACKUP_DIR}/.env.backup."* | head -1)
-          cp "${LATEST_ENV}" "${VPS_DEPLOY_DIR}/.env"
-          echo "✅ .env restored from backup"
+        # Restore .env if exists and backup directory is available
+        if [ -n "${BACKUP_DIR}" ] && [ -f "${BACKUP_DIR}/.env.backup."* ] 2>/dev/null; then
+          LATEST_ENV=$(ls -t "${BACKUP_DIR}/.env.backup."* 2>/dev/null | head -1)
+          if [ -n "${LATEST_ENV}" ] && [ -f "${LATEST_ENV}" ]; then
+            cp "${LATEST_ENV}" "${VPS_DEPLOY_DIR}/.env"
+            echo "✅ .env restored from backup"
+          else
+            echo "⚠️  No .env backup found - using default configuration"
+          fi
         else
           echo "⚠️  No .env backup found - using default configuration"
         fi
