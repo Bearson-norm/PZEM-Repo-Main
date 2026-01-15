@@ -216,10 +216,65 @@ jobs:
         # Make scripts executable
         chmod +x ${VPS_DEPLOY_DIR}/*.sh 2>/dev/null || true
         
+        # Check network connectivity before build
+        echo "🌐 Checking network connectivity..."
+        if ! timeout 10 ping -c 1 8.8.8.8 > /dev/null 2>&1 && ! timeout 10 ping -c 1 1.1.1.1 > /dev/null 2>&1; then
+          echo "⚠️  Warning: Network connectivity check failed"
+          echo "   This may cause Docker build to fail"
+        else
+          echo "✅ Network connectivity OK"
+        fi
+        
+        # Check Docker Hub connectivity
+        echo "🐳 Checking Docker Hub connectivity..."
+        if ! timeout 10 curl -s https://auth.docker.io > /dev/null 2>&1; then
+          echo "⚠️  Warning: Cannot reach Docker Hub"
+          echo "   Will try to build anyway, but may fail"
+        else
+          echo "✅ Docker Hub reachable"
+        fi
+        
         # Build and start
         echo "🔨 Building containers..."
         cd "${VPS_DEPLOY_DIR}"
-        $DOCKER_COMPOSE build --no-cache
+        
+        # Try build with retry mechanism
+        BUILD_SUCCESS=false
+        MAX_RETRIES=3
+        RETRY_COUNT=0
+        
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$BUILD_SUCCESS" = false ]; do
+          RETRY_COUNT=$((RETRY_COUNT + 1))
+          echo "   Build attempt $RETRY_COUNT of $MAX_RETRIES..."
+          
+          if $DOCKER_COMPOSE build --no-cache 2>&1; then
+            BUILD_SUCCESS=true
+            echo "✅ Build successful"
+          else
+            BUILD_EXIT_CODE=$?
+            echo "⚠️  Build failed with exit code: $BUILD_EXIT_CODE"
+            
+            if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+              WAIT_TIME=$((RETRY_COUNT * 10))
+              echo "   Waiting ${WAIT_TIME} seconds before retry..."
+              sleep $WAIT_TIME
+            else
+              echo "❌ Build failed after $MAX_RETRIES attempts"
+              echo "   This may be due to network issues or Docker Hub being unavailable"
+              echo "   Attempting to start with existing images (if available)..."
+              
+              # Check if images exist locally
+              if docker images | grep -q "pzem-monitoring.*dashboard\|.*dashboard.*pzem" || \
+                 docker images | grep -q "pzem-monitoring.*mqtt\|.*mqtt.*pzem"; then
+                echo "   Found existing images, will try to use them"
+                BUILD_SUCCESS=true  # Continue with existing images
+              else
+                echo "   No existing images found, deployment will fail"
+                exit 1
+              fi
+            fi
+          fi
+        done
         
         echo "🚀 Starting services..."
         $DOCKER_COMPOSE up -d
