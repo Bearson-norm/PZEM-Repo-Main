@@ -119,11 +119,12 @@ jobs:
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
-    - name: Test docker-compose build
+    - name: Test docker compose build
       working-directory: pzem-monitoring/V9-Docker
       run: |
-        docker-compose config
-        docker-compose build --no-cache
+        # GitHub Actions runners use Docker Compose v2 (docker compose)
+        docker compose config
+        docker compose build --no-cache
 
   security:
     name: Security Scan
