@@ -55,21 +55,32 @@ jobs:
         PACKAGE_NAME="pzem-monitoring-deploy-${TIMESTAMP}.tar.gz"
         
         # Create package from V9-Docker directory
+        # Note: --exclude options must come before files/directories
         cd ${PROJECT_DIR}
+        
+        # Build list of files to include
+        FILES_TO_INCLUDE="dashboard/ mqtt/ docker-compose.yml"
+        
+        # Add optional files if they exist
+        [ -f "start.sh" ] && FILES_TO_INCLUDE="$FILES_TO_INCLUDE start.sh"
+        [ -f "nginx-pzem.conf" ] && FILES_TO_INCLUDE="$FILES_TO_INCLUDE nginx-pzem.conf"
+        [ -f "setup-nginx-ssl.sh" ] && FILES_TO_INCLUDE="$FILES_TO_INCLUDE setup-nginx-ssl.sh"
+        
+        # Add markdown files if any exist
+        if ls *.md 1> /dev/null 2>&1; then
+          FILES_TO_INCLUDE="$FILES_TO_INCLUDE *.md"
+        fi
+        
+        # Create tar archive with excludes before files
         tar -czf ../../${PACKAGE_NAME} \
-          dashboard/ \
-          mqtt/ \
-          docker-compose.yml \
-          start.sh \
-          nginx-pzem.conf \
-          setup-nginx-ssl.sh \
-          *.md \
           --exclude='*.pyc' \
           --exclude='__pycache__' \
           --exclude='*.log' \
           --exclude='*.pdf' \
           --exclude='*.zip' \
-          --exclude='*.tar.gz'
+          --exclude='*.tar.gz' \
+          --exclude='.git' \
+          $FILES_TO_INCLUDE
         
         cd ../..
         echo "PACKAGE_NAME=${PACKAGE_NAME}" >> $GITHUB_ENV
