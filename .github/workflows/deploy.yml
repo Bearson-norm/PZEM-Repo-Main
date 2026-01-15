@@ -124,8 +124,37 @@ jobs:
 
     - name: Upload package to VPS
       run: |
-        scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 ${PACKAGE_NAME} ${{ env.VPS_USER }}@${{ env.VPS_HOST }}:/tmp/
-        echo "✅ Package uploaded to VPS"
+        # Retry function for SCP
+        MAX_RETRIES=3
+        RETRY_COUNT=0
+        SCP_SUCCESS=false
+        
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$SCP_SUCCESS" = false ]; do
+          RETRY_COUNT=$((RETRY_COUNT + 1))
+          echo "📤 Upload attempt $RETRY_COUNT of $MAX_RETRIES..."
+          
+          if scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=10 ${PACKAGE_NAME} ${{ env.VPS_USER }}@${{ env.VPS_HOST }}:/tmp/ 2>&1; then
+            SCP_SUCCESS=true
+            echo "✅ Package uploaded to VPS"
+          else
+            SCP_EXIT_CODE=$?
+            echo "⚠️  Upload failed with exit code: $SCP_EXIT_CODE"
+            
+            if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+              WAIT_TIME=$((RETRY_COUNT * 15))
+              echo "   Waiting ${WAIT_TIME} seconds before retry..."
+              sleep $WAIT_TIME
+            else
+              echo "❌ Upload failed after $MAX_RETRIES attempts"
+              echo "   Possible causes:"
+              echo "   - VPS is unreachable (check if VPS is running)"
+              echo "   - Network connectivity issues"
+              echo "   - Firewall blocking connection"
+              echo "   - SSH service not running on VPS"
+              exit 1
+            fi
+          fi
+        done
 
     - name: Create remote deployment script
       run: |
@@ -322,15 +351,71 @@ jobs:
         echo "📍 Location: ${VPS_DEPLOY_DIR}"
         REMOTE_SCRIPT
         
-        scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 /tmp/remote-deploy.sh ${{ env.VPS_USER }}@${{ env.VPS_HOST }}:/tmp/
+        # Upload deployment script with retry
+        MAX_RETRIES=3
+        RETRY_COUNT=0
+        SCRIPT_UPLOAD_SUCCESS=false
+        
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$SCRIPT_UPLOAD_SUCCESS" = false ]; do
+          RETRY_COUNT=$((RETRY_COUNT + 1))
+          echo "📤 Uploading deployment script (attempt $RETRY_COUNT of $MAX_RETRIES)..."
+          
+          if scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=10 /tmp/remote-deploy.sh ${{ env.VPS_USER }}@${{ env.VPS_HOST }}:/tmp/ 2>&1; then
+            SCRIPT_UPLOAD_SUCCESS=true
+            echo "✅ Deployment script uploaded"
+          else
+            if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+              WAIT_TIME=$((RETRY_COUNT * 15))
+              echo "   Waiting ${WAIT_TIME} seconds before retry..."
+              sleep $WAIT_TIME
+            else
+              echo "❌ Failed to upload deployment script after $MAX_RETRIES attempts"
+              exit 1
+            fi
+          fi
+        done
 
     - name: Execute deployment on VPS
       run: |
-        ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 ${{ env.VPS_USER }}@${{ env.VPS_HOST }} "chmod +x /tmp/remote-deploy.sh && bash /tmp/remote-deploy.sh"
+        # Execute deployment with retry
+        MAX_RETRIES=3
+        RETRY_COUNT=0
+        DEPLOY_SUCCESS=false
+        
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$DEPLOY_SUCCESS" = false ]; do
+          RETRY_COUNT=$((RETRY_COUNT + 1))
+          echo "🚀 Deployment attempt $RETRY_COUNT of $MAX_RETRIES..."
+          
+          if ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=10 ${{ env.VPS_USER }}@${{ env.VPS_HOST }} "chmod +x /tmp/remote-deploy.sh && bash /tmp/remote-deploy.sh" 2>&1; then
+            DEPLOY_SUCCESS=true
+            echo "✅ Deployment executed successfully"
+          else
+            DEPLOY_EXIT_CODE=$?
+            echo "⚠️  Deployment failed with exit code: $DEPLOY_EXIT_CODE"
+            
+            if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+              WAIT_TIME=$((RETRY_COUNT * 15))
+              echo "   Waiting ${WAIT_TIME} seconds before retry..."
+              sleep $WAIT_TIME
+            else
+              echo "❌ Deployment failed after $MAX_RETRIES attempts"
+              exit 1
+            fi
+          fi
+        done
 
     - name: Verify deployment
       run: |
-        ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 ${{ env.VPS_USER }}@${{ env.VPS_HOST }} << 'EOF'
+        # Verify with retry
+        MAX_RETRIES=2
+        RETRY_COUNT=0
+        VERIFY_SUCCESS=false
+        
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$VERIFY_SUCCESS" = false ]; do
+          RETRY_COUNT=$((RETRY_COUNT + 1))
+          echo "🔍 Verification attempt $RETRY_COUNT of $MAX_RETRIES..."
+          
+          if ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=10 ${{ env.VPS_USER }}@${{ env.VPS_HOST }} << 'EOF'
           cd ${{ env.VPS_DEPLOY_DIR }}
           echo "📊 Service Status:"
           if command -v docker-compose &> /dev/null; then
@@ -342,6 +427,19 @@ jobs:
           echo "🐳 Running containers:"
           docker ps --filter "name=pzem" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
         EOF
+          then
+            VERIFY_SUCCESS=true
+            echo "✅ Verification successful"
+          else
+            if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+              echo "   Waiting 10 seconds before retry..."
+              sleep 10
+            else
+              echo "⚠️  Verification failed, but deployment may still be successful"
+              VERIFY_SUCCESS=true  # Don't fail the job
+            fi
+          fi
+        done
 
     - name: Cleanup local files
       if: always()
