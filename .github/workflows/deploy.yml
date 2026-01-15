@@ -35,19 +35,55 @@ jobs:
 
     - name: Setup SSH
       run: |
+        set +e  # Don't fail on errors in this step
+        
         mkdir -p ~/.ssh
         chmod 700 ~/.ssh
         
-        # Write private key to file
+        # Write private key to file (preserve newlines)
         echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
         chmod 600 ~/.ssh/deploy_key
         
+        # Verify key file was created
+        if [ ! -f ~/.ssh/deploy_key ]; then
+          echo "❌ Error: Failed to create deploy_key file"
+          exit 1
+        fi
+        
+        # Check key format
+        if ! grep -q "BEGIN.*PRIVATE KEY" ~/.ssh/deploy_key; then
+          echo "⚠️  Warning: Key format may be incorrect (missing BEGIN line)"
+        fi
+        
         # Add VPS to known hosts
-        ssh-keyscan -H ${{ env.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+        ssh-keyscan -H ${{ env.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
         chmod 600 ~/.ssh/known_hosts
         
-        # Test SSH connection
-        ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${{ env.VPS_USER }}@${{ env.VPS_HOST }} "echo 'SSH connection test successful'" || echo "Warning: SSH test failed, but continuing..."
+        # Test SSH connection (non-blocking)
+        echo "🔍 Testing SSH connection..."
+        SSH_TEST_OUTPUT=$(ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes ${{ env.VPS_USER }}@${{ env.VPS_HOST }} "echo 'SSH connection test successful'" 2>&1)
+        SSH_EXIT_CODE=$?
+        
+        if [ $SSH_EXIT_CODE -eq 0 ]; then
+          echo "✅ SSH connection test successful"
+        else
+          echo "⚠️  Warning: SSH connection test failed (exit code: $SSH_EXIT_CODE)"
+          echo "   Error output: $SSH_TEST_OUTPUT"
+          echo "   This may be due to:"
+          echo "   - Key format issue (check GitHub Secret VPS_SSH_KEY)"
+          echo "   - Key not matching VPS authorized_keys"
+          echo "   - Network connectivity issue"
+          echo "   - VPS host unreachable"
+          echo ""
+          echo "   Debug info:"
+          echo "   - Key file exists: $([ -f ~/.ssh/deploy_key ] && echo 'yes' || echo 'no')"
+          echo "   - Key file size: $(wc -c < ~/.ssh/deploy_key) bytes"
+          echo "   - Key starts with BEGIN: $(head -1 ~/.ssh/deploy_key | grep -q 'BEGIN' && echo 'yes' || echo 'no')"
+          echo ""
+          echo "   Continuing with deployment attempt (may fail at upload step)..."
+        fi
+        
+        set -e  # Re-enable error checking
 
     - name: Create deployment package
       run: |
