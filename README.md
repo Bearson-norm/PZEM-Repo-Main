@@ -2,6 +2,37 @@
 
 Sistem monitoring energi 3-phase berbasis IoT menggunakan sensor PZEM dengan ESP32, dilengkapi dashboard real-time, laporan PDF, dan CI/CD otomatis.
 
+---
+
+## 🚨 TROUBLESHOOTING - Status PENDING / System Down
+
+**Jika sistem monitoring Anda menunjukkan:**
+- ❌ Status "PENDING" (tidak merespons)
+- ❌ Response time "N/A"
+- ❌ Uptime rendah (<99%)
+- ❌ Grafik monitoring banyak bar merah/orange
+
+### 📖 Panduan Lengkap (Bahasa Indonesia):
+👉 **[PANDUAN_TROUBLESHOOTING_BAHASA_INDONESIA.md](PANDUAN_TROUBLESHOOTING_BAHASA_INDONESIA.md)** ⭐ **Mulai di sini!**
+
+### ⚡ Quick Fix (5 menit):
+👉 **[QUICK_FIX_PENDING.md](QUICK_FIX_PENDING.md)**
+
+### 🔧 Tools & Scripts:
+
+| Tool | Platform | Lokasi | Fungsi |
+|------|----------|--------|--------|
+| Diagnosis Script | Windows | `.github/diagnose-vps.ps1` | Cek semua masalah otomatis |
+| Diagnosis Script | Linux/Mac | `.github/diagnose-vps.sh` | Cek semua masalah otomatis |
+| Quick Fix Script | VPS | `.github/quick-fix.sh` | Fix masalah umum |
+
+### 📚 Dokumentasi Troubleshooting:
+- **[TROUBLESHOOTING_SUMMARY.md](.github/TROUBLESHOOTING_SUMMARY.md)** - Summary lengkap
+- **[TROUBLESHOOTING_README.md](.github/TROUBLESHOOTING_README.md)** - Tools overview
+- **[TROUBLESHOOTING_PENDING_STATUS.md](.github/TROUBLESHOOTING_PENDING_STATUS.md)** - Detail step-by-step
+
+---
+
 ## 📋 Overview
 
 Project ini terdiri dari dua komponen utama:

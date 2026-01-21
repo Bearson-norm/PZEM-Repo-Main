@@ -1596,18 +1596,6 @@
             }
         }
 
-                powerChart.data.labels = commonLabels;
-                powerChart.data.datasets = powerDatasets;
-                powerChart.update();
-
-                addDebugLog(`Updated comparison charts with ${allDevicesData.length} devices`);
-                
-            } catch (error) {
-                console.error('Error updating comparison charts:', error);
-                addDebugLog(`Error updating comparison charts: ${error.message}`);
-            }
-        }
-
         // Get chart data for all devices
         async function getAllDevicesChartData() {
             const deviceAddresses = Object.keys(latestData);
