@@ -97,15 +97,18 @@ jobs:
         # Build list of files to include
         FILES_TO_INCLUDE="dashboard/ mqtt/ docker-compose.yml"
         
-        # Add optional files if they exist
+        # Add important files if they exist
         [ -f "start.sh" ] && FILES_TO_INCLUDE="$FILES_TO_INCLUDE start.sh"
         [ -f "nginx-pzem.conf" ] && FILES_TO_INCLUDE="$FILES_TO_INCLUDE nginx-pzem.conf"
         [ -f "setup-nginx-ssl.sh" ] && FILES_TO_INCLUDE="$FILES_TO_INCLUDE setup-nginx-ssl.sh"
         
-        # Add markdown files if any exist
+        # Add markdown files if any exist (for documentation)
         if ls *.md 1> /dev/null 2>&1; then
           FILES_TO_INCLUDE="$FILES_TO_INCLUDE *.md"
         fi
+        
+        echo "📦 Files to include in package:"
+        echo "$FILES_TO_INCLUDE"
         
         # Create tar archive with excludes before files
         tar -czf ../../${PACKAGE_NAME} \
