@@ -214,10 +214,18 @@ jobs:
               echo "✅ .env backed up"
             fi
             
-            # Stop services (preserve volumes)
-            echo "🛑 Stopping services..."
+            # Stop services (preserve volumes) - IMPORTANT: Stop before extracting new files
+            echo "🛑 Stopping services to ensure files are not locked..."
             $DOCKER_COMPOSE down 2>/dev/null || true
-            sleep 5
+            sleep 10  # Give containers time to fully stop
+            
+            # Verify containers are stopped
+            if docker ps | grep -q "pzem-monitoring\|pzem"; then
+              echo "⚠️  Warning: Some containers are still running, forcing stop..."
+              docker ps | grep -E "pzem-monitoring|pzem" | awk '{print $1}' | xargs -r docker stop 2>/dev/null || true
+              sleep 5
+            fi
+            echo "✅ Services stopped"
           fi
           
           # Backup directory
@@ -231,6 +239,33 @@ jobs:
         mkdir -p "${VPS_DEPLOY_DIR}"
         cd "${VPS_DEPLOY_DIR}"
         tar -xzf "${PACKAGE_FILE}"
+        
+        # Verify critical files were extracted
+        echo "🔍 Verifying extracted files..."
+        if [ ! -f "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html" ]; then
+          echo "❌ ERROR: dashboard.html not found after extraction!"
+          exit 1
+        fi
+        
+        # Verify dashboard.html is not empty and has correct content
+        DASHBOARD_SIZE=$(wc -c < "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html")
+        if [ "$DASHBOARD_SIZE" -lt 1000 ]; then
+          echo "❌ ERROR: dashboard.html seems too small ($DASHBOARD_SIZE bytes)"
+          exit 1
+        fi
+        
+        # Check for duplicate code (the bug we're fixing)
+        DUPLICATE_COUNT=$(grep -c "powerChart.data.labels = commonLabels" "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html" || echo "0")
+        if [ "$DUPLICATE_COUNT" -gt 1 ]; then
+          echo "⚠️  WARNING: Found $DUPLICATE_COUNT instances of duplicate code in dashboard.html"
+          echo "   This may indicate the file wasn't updated correctly"
+        else
+          echo "✅ dashboard.html verified (no duplicate code found)"
+        fi
+        
+        echo "✅ Files extracted successfully"
+        echo "   - dashboard.html size: $DASHBOARD_SIZE bytes"
+        echo "   - Location: ${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html"
         
         # Restore .env if exists and backup directory is available
         if [ -n "${BACKUP_DIR}" ] && [ -f "${BACKUP_DIR}/.env.backup."* ] 2>/dev/null; then
@@ -247,6 +282,12 @@ jobs:
         
         # Make scripts executable
         chmod +x ${VPS_DEPLOY_DIR}/*.sh 2>/dev/null || true
+        
+        # Ensure dashboard template files have correct permissions
+        echo "🔧 Setting correct permissions for dashboard files..."
+        chmod -R 644 ${VPS_DEPLOY_DIR}/dashboard/templates/*.html 2>/dev/null || true
+        chmod 755 ${VPS_DEPLOY_DIR}/dashboard/templates 2>/dev/null || true
+        echo "✅ Permissions set"
         
         # Check network connectivity before build
         echo "🌐 Checking network connectivity..."
@@ -308,12 +349,40 @@ jobs:
           fi
         done
         
+        # Stop existing containers first (if running)
+        echo "🛑 Stopping existing containers..."
+        $DOCKER_COMPOSE down 2>/dev/null || true
+        sleep 5
+        
+        # Verify dashboard.html is accessible before starting
+        echo "🔍 Final verification of dashboard.html..."
+        if [ -f "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html" ]; then
+          DASHBOARD_LINE_COUNT=$(wc -l < "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html")
+          echo "✅ dashboard.html exists with $DASHBOARD_LINE_COUNT lines"
+          
+          # Check line 1605 specifically
+          LINE_1605=$(sed -n '1605p' "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html" 2>/dev/null || echo "")
+          if echo "$LINE_1605" | grep -q "try {"; then
+            echo "✅ Line 1605 is correct (starts try block)"
+          else
+            echo "⚠️  Warning: Line 1605 may not be correct: $LINE_1605"
+          fi
+        else
+          echo "❌ ERROR: dashboard.html not found before starting containers!"
+          exit 1
+        fi
+        
         echo "🚀 Starting services..."
         $DOCKER_COMPOSE up -d
         
         # Wait for services
         echo "⏳ Waiting for services to start..."
         sleep 20
+        
+        # Force restart dashboard container to ensure it picks up new files
+        echo "🔄 Restarting dashboard container to ensure file changes are loaded..."
+        $DOCKER_COMPOSE restart dashboard 2>/dev/null || true
+        sleep 10
         
         # Verify database
         echo "🔍 Verifying database..."
@@ -345,6 +414,23 @@ jobs:
           echo "✅ Health check passed"
         else
           echo "⚠️  Health check failed (service may still be starting)"
+        fi
+        
+        # Verify dashboard.html is accessible from inside container
+        echo "🔍 Verifying dashboard.html in running container..."
+        if $DOCKER_COMPOSE exec -T dashboard test -f /app/templates/dashboard.html 2>/dev/null; then
+          CONTAINER_LINE_COUNT=$($DOCKER_COMPOSE exec -T dashboard wc -l < /app/templates/dashboard.html 2>/dev/null || echo "0")
+          echo "✅ dashboard.html exists in container with $CONTAINER_LINE_COUNT lines"
+          
+          # Check if file has the fix (no duplicate code)
+          CONTAINER_DUPLICATE_COUNT=$($DOCKER_COMPOSE exec -T dashboard grep -c "powerChart.data.labels = commonLabels" /app/templates/dashboard.html 2>/dev/null || echo "0")
+          if [ "$CONTAINER_DUPLICATE_COUNT" -eq 1 ]; then
+            echo "✅ dashboard.html in container is correct (no duplicate code)"
+          else
+            echo "⚠️  WARNING: Found $CONTAINER_DUPLICATE_COUNT instances in container (expected 1)"
+          fi
+        else
+          echo "⚠️  Warning: Could not verify dashboard.html in container"
         fi
         
         # Cleanup
