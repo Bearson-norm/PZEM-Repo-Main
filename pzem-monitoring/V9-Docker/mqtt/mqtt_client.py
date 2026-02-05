@@ -22,8 +22,19 @@ JAKARTA_TZ = pytz.timezone('Asia/Jakarta')
 # MQTT Configuration
 MQTT_BROKER = "103.87.67.139"
 MQTT_PORT = 1883
-MQTT_TOPIC = "energy/pzem/data"  # Only listen to data topic
+MQTT_TOPICS = [
+    "energy/3phase/+/phase/+/data",  # Pattern untuk 3-phase system: energy/3phase/{building}/phase/{R|S|T}/data
+    "energy/pzem/data"  # Direct PZEM data topic
+]
 MQTT_QOS = 1
+
+# Device address to building mapping
+# device_address "1", "2", "3" -> CKPG1 with phases R, S, T respectively
+DEVICE_BUILDING_MAP = {
+    "1": {"building": "CKPG1", "phase": "R"},
+    "2": {"building": "CKPG1", "phase": "S"},
+    "3": {"building": "CKPG1", "phase": "T"}
+}
 
 DB_CONFIG = {
     'host': os.getenv('DB_HOST', 'localhost'),
@@ -139,7 +150,7 @@ class PZEMDataHandler:
             logger.error(f"Error creating tables: {e}")
             self.db_connection.rollback()
     
-    def save_sensor_data(self, data):
+    def save_sensor_data(self, data, building=None, phase=None):
         """Simpan data sensor dengan timestamp Jakarta"""
         try:
             self.ensure_db_connection()
@@ -148,25 +159,84 @@ class PZEMDataHandler:
             # Get Jakarta time for logging
             jakarta_now = datetime.now(self.jakarta_tz)
             
-            # Validasi data yang diperlukan
-            if not data.get('device_address'):
-                logger.error("Missing device_address in data")
+            # Extract device_address dari berbagai sumber
+            # Priority: device_address > device_id > pzem_address > address > building+phase
+            device_address = None
+            if data.get('device_address'):
+                device_address = str(data.get('device_address')).strip()
+            elif data.get('device_id'):
+                device_address = str(data.get('device_id')).strip()
+            elif data.get('pzem_address'):
+                device_address = str(data.get('pzem_address')).strip()
+            elif data.get('address'):
+                device_address = str(data.get('address')).strip()
+            elif building and phase:
+                # Fallback: gunakan kombinasi building-phase sebagai device_address
+                device_address = f"{building}-{phase}"
+            
+            if not device_address:
+                logger.error("Missing device_address in data - cannot determine device identifier")
+                logger.error(f"Available fields: {list(data.keys())}")
                 return False
             
-            # Extract dan bersihkan data (sama seperti sebelumnya)
-            device_address = str(data.get('device_address')).strip()
-            voltage = self.safe_float(data.get('voltage') or data.get('avg_voltage'))
-            current = self.safe_float(data.get('current') or data.get('avg_current'))
-            power = self.safe_float(data.get('power') or data.get('avg_power'))
-            energy = self.safe_float(data.get('energy') or data.get('total_energy'))
-            frequency = self.safe_float(data.get('frequency', 50.0))
-            power_factor = self.safe_float(data.get('power_factor', 1.0))
+            # Check if device_address is in mapping (1, 2, 3 -> CKPG1)
+            if device_address in DEVICE_BUILDING_MAP:
+                mapping = DEVICE_BUILDING_MAP[device_address]
+                # Override building and phase from mapping if not already set
+                if not building:
+                    building = mapping["building"]
+                if not phase:
+                    phase = mapping["phase"]
+                logger.info(f"[MAPPING] Device {device_address} mapped to {building} Phase {phase}")
+            
+            # Extract dan bersihkan data
+            device_address = str(device_address).strip()
+            # Handle both direct values and aggregated values (from energy/pzem/data)
+            # Check current_data nested object if available
+            current_data = data.get('current_data', {}) if isinstance(data.get('current_data'), dict) else {}
+            
+            voltage = self.safe_float(
+                data.get('voltage') or 
+                data.get('avg_voltage') or 
+                current_data.get('voltage')
+            )
+            current = self.safe_float(
+                data.get('current') or 
+                data.get('avg_current') or 
+                current_data.get('current')
+            )
+            power = self.safe_float(
+                data.get('power') or 
+                data.get('avg_power') or 
+                data.get('active_power') or 
+                current_data.get('active_power')
+            )
+            energy = self.safe_float(
+                data.get('energy') or 
+                data.get('total_energy') or 
+                data.get('active_energy') or 
+                current_data.get('active_energy')
+            )
+            frequency = self.safe_float(
+                data.get('frequency') or 
+                current_data.get('frequency') or 
+                50.0
+            )
+            power_factor = self.safe_float(
+                data.get('power_factor') or 
+                current_data.get('power_factor') or 
+                1.0
+            )
             
             # Data tambahan
             wifi_rssi = self.safe_int(data.get('wifi_rssi'))
-            device_timestamp = self.safe_int(data.get('timestamp') or data.get('device_timestamp'))
+            device_timestamp = self.safe_int(data.get('timestamp') or data.get('device_timestamp') or data.get('time'))
             sample_interval = self.safe_int(data.get('interval_minutes', 60))
             sample_count = self.safe_int(data.get('sample_count', 1))
+            
+            # Get building and phase from data or parameters
+            building = building or data.get('building') or data.get('building_id')
+            phase = phase or data.get('phase') or data.get('phase_id')
             
             # Insert data dengan timestamp UTC (database tetap menggunakan UTC)
             insert_query = """
@@ -187,13 +257,13 @@ class PZEMDataHandler:
             
             cursor.execute(insert_query, values)
             
-            # Update device metadata
-            self.update_device_metadata(device_address, cursor)
+            # Update device metadata dengan building dan phase
+            self.update_device_metadata(device_address, cursor, building, phase)
             
             self.db_connection.commit()
             cursor.close()
             
-            logger.info(f"[OK] Data saved for device {device_address} at {jakarta_now.strftime('%H:%M:%S')} WIB - Power: {power}W, Voltage: {voltage}V")
+            logger.info(f"[OK] Data saved for device {device_address} ({building}/{phase}) at {jakarta_now.strftime('%H:%M:%S')} WIB - Power: {power}W, Voltage: {voltage}V")
             return True
             
         except Exception as e:
@@ -202,20 +272,34 @@ class PZEMDataHandler:
                 self.db_connection.rollback()
             return False
     
-    def update_device_metadata(self, device_address, cursor):
-        """Update metadata device"""
+    def update_device_metadata(self, device_address, cursor, building=None, phase=None):
+        """Update metadata device dengan building dan phase"""
         try:
+            # Build device name from building and phase if available
+            device_name = None
+            if building and phase:
+                device_name = f"Phase {phase} - {building}"
+            elif phase:
+                device_name = f"Phase {phase}"
+            elif building:
+                device_name = f"Device {building}"
+            
+            # Use building as location
+            location = building if building else None
+            
             upsert_query = """
-            INSERT INTO pzem_devices (device_address, last_seen, total_records)
-            VALUES (%s, CURRENT_TIMESTAMP, 1)
+            INSERT INTO pzem_devices (device_address, device_name, location, last_seen, total_records)
+            VALUES (%s, %s, %s, CURRENT_TIMESTAMP, 1)
             ON CONFLICT (device_address) 
             DO UPDATE SET 
+                device_name = COALESCE(EXCLUDED.device_name, pzem_devices.device_name),
+                location = COALESCE(EXCLUDED.location, pzem_devices.location),
                 last_seen = CURRENT_TIMESTAMP,
                 total_records = pzem_devices.total_records + 1,
                 updated_at = CURRENT_TIMESTAMP;
             """
             
-            cursor.execute(upsert_query, (device_address,))
+            cursor.execute(upsert_query, (device_address, device_name, location))
             
         except Exception as e:
             logger.error(f"Error updating device metadata: {e}")
@@ -268,12 +352,13 @@ class MQTTClient:
             self.connected = True
             logger.info(f"[SUCCESS] Connected to MQTT broker {MQTT_BROKER}:{MQTT_PORT}")
             
-            # Subscribe ke topic spesifik
-            result = client.subscribe(MQTT_TOPIC, MQTT_QOS)
-            if result[0] == mqtt.MQTT_ERR_SUCCESS:
-                logger.info(f"[SUCCESS] Subscribed to topic: {MQTT_TOPIC} (QoS: {MQTT_QOS})")
-            else:
-                logger.error(f"[ERROR] Failed to subscribe to topic: {MQTT_TOPIC}")
+            # Subscribe ke semua topics
+            for topic in MQTT_TOPICS:
+                result = client.subscribe(topic, MQTT_QOS)
+                if result[0] == mqtt.MQTT_ERR_SUCCESS:
+                    logger.info(f"[SUCCESS] Subscribed to topic: {topic} (QoS: {MQTT_QOS})")
+                else:
+                    logger.error(f"[ERROR] Failed to subscribe to topic: {topic}")
         else:
             self.connected = False
             error_messages = {
@@ -299,6 +384,27 @@ class MQTTClient:
             # Log basic message info
             logger.info(f"[MESSAGE #{self.message_count}] Topic: {msg.topic}")
             
+            # Extract building and phase from topic
+            building = None
+            phase = None
+            try:
+                topic_parts = msg.topic.split('/')
+                
+                # Handle different topic formats
+                if msg.topic.startswith('energy/3phase/'):
+                    # Topic format: energy/3phase/{building}/phase/{R|S|T}/data
+                    if len(topic_parts) >= 5:
+                        building = topic_parts[2]  # building ID
+                        phase = topic_parts[4].upper()  # R, S, or T
+                        logger.debug(f"[TOPIC] Building: {building}, Phase: {phase}")
+                elif msg.topic == 'energy/pzem/data':
+                    # Direct PZEM data - building/phase will be determined from device_address mapping
+                    logger.debug(f"[TOPIC] Direct PZEM data - will use device_address mapping")
+                else:
+                    logger.warning(f"[WARNING] Unknown topic format: {msg.topic}")
+            except Exception as e:
+                logger.warning(f"[WARNING] Could not parse topic structure: {e}")
+            
             # Decode message
             payload = msg.payload.decode('utf-8')
             logger.debug(f"[PAYLOAD] Size: {len(payload)} bytes")
@@ -316,15 +422,45 @@ class MQTTClient:
                 logger.error(f"[ERROR] Expected JSON object, got {type(data)}")
                 return
             
-            # Log key data points
-            device = data.get('device_address', 'Unknown')
-            power = data.get('power') or data.get('avg_power', 0)
-            voltage = data.get('voltage') or data.get('avg_voltage', 0)
+            # Extract device_address early to check mapping
+            device_address = data.get('device_address') or data.get('device_id') or data.get('pzem_address') or data.get('address')
             
-            logger.info(f"[DATA] Device {device}: {power}W, {voltage}V")
+            # Check device_address mapping for CKPG1 (1,2,3 -> CKPG1 R,S,T)
+            if device_address and str(device_address).strip() in DEVICE_BUILDING_MAP:
+                mapping = DEVICE_BUILDING_MAP[str(device_address).strip()]
+                # Override building and phase from mapping
+                building = mapping["building"]
+                phase = mapping["phase"]
+                logger.info(f"[MAPPING] Device {device_address} mapped to {building} Phase {phase}")
+            
+            # Add building and phase to data (from topic or from mapping)
+            if building:
+                data['building'] = building
+            if phase:
+                data['phase'] = phase
+                data['phase_id'] = phase
+            
+            # Also check if building/phase already in JSON payload (prefer topic/mapping)
+            if not data.get('building') and data.get('building_id'):
+                data['building'] = data['building_id']
+            if not data.get('phase') and data.get('phase_id'):
+                data['phase'] = data['phase_id']
+            
+            # Log key data points
+            device = device_address or 'Unknown'
+            # Handle both direct and nested current_data
+            power = data.get('power') or data.get('avg_power') or data.get('active_power')
+            if not power and isinstance(data.get('current_data'), dict):
+                power = data['current_data'].get('active_power')
+            voltage = data.get('voltage') or data.get('avg_voltage')
+            if not voltage and isinstance(data.get('current_data'), dict):
+                voltage = data['current_data'].get('voltage')
+            
+            logger.info(f"[DATA] Device {device} ({building}/{phase}): {power or 0}W, {voltage or 0}V")
+            logger.debug(f"[DEBUG] Available fields in data: {list(data.keys())}")
             
             # Simpan ke database
-            if userdata.save_sensor_data(data):
+            if userdata.save_sensor_data(data, building, phase):
                 logger.debug("[DATABASE] Data successfully saved")
             else:
                 logger.warning("[DATABASE] Data save failed")
@@ -350,7 +486,7 @@ class MQTTClient:
         while connect_attempt < max_connect_attempts and self.running:
             try:
                 logger.info(f"[CONNECTING] MQTT broker {MQTT_BROKER}:{MQTT_PORT} (Attempt {connect_attempt + 1}/{max_connect_attempts})")
-                logger.info(f"[LISTENING] Topic: {MQTT_TOPIC}")
+                logger.info(f"[LISTENING] Topics: {', '.join(MQTT_TOPICS)}")
                 
                 self.client.connect(MQTT_BROKER, MQTT_PORT, 60)
                 
@@ -433,7 +569,8 @@ def signal_handler(signum, frame):
 
 def main():
     logger.info("Starting PZEM MQTT Client (Windows Compatible)...")
-    logger.info(f"Target MQTT Topic: {MQTT_TOPIC}")
+    logger.info(f"Target MQTT Topics: {', '.join(MQTT_TOPICS)}")
+    logger.info(f"Device Mapping: {DEVICE_BUILDING_MAP}")
     logger.info(f"Database: {DB_CONFIG['database']} on {DB_CONFIG['host']}")
     
     # Setup signal handlers

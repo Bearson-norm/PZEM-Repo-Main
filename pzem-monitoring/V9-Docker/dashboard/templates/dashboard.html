@@ -98,6 +98,53 @@
             box-shadow: 0 5px 15px rgba(155, 89, 182, 0.3);
         }
 
+        /* Locations Section */
+        .locations-section {
+            margin-bottom: 25px;
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding: 15px 20px;
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
+        }
+
+        .section-header h2 {
+            font-size: 1.5rem;
+            color: #2c3e50;
+            font-weight: 600;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .section-header h2 i {
+            color: #3498db;
+        }
+
+        .location-count-badge {
+            background: linear-gradient(135deg, #3498db, #5dade2);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+
+        /* Locations Container */
+        #locationsContainer {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
         /* 3-Phase Analysis Panel */
         .three-phase-panel {
             background: rgba(255, 255, 255, 0.85);
@@ -107,6 +154,115 @@
             margin-bottom: 25px;
             box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06);
             border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .location-panel {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 0;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            overflow: hidden;
+            margin-bottom: 15px;
+        }
+
+        .location-panel:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 12px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .location-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 25px;
+            cursor: pointer;
+            background: linear-gradient(135deg, rgba(52, 152, 219, 0.1), rgba(155, 89, 182, 0.1));
+            transition: background 0.3s ease;
+            border-bottom: 2px solid rgba(52, 152, 219, 0.2);
+        }
+
+        .location-header:hover {
+            background: linear-gradient(135deg, rgba(52, 152, 219, 0.15), rgba(155, 89, 182, 0.15));
+        }
+
+        .location-header.expanded {
+            background: linear-gradient(135deg, rgba(52, 152, 219, 0.2), rgba(155, 89, 182, 0.2));
+        }
+
+        .location-title {
+            font-size: 1.4rem;
+            color: #2c3e50;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .location-title i {
+            color: #3498db;
+            transition: transform 0.3s ease;
+        }
+
+        .location-header.expanded .location-title i.fa-chevron-down {
+            transform: rotate(180deg);
+        }
+
+        .location-status {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            font-size: 0.9rem;
+            color: #7f8c8d;
+        }
+
+        .location-summary {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .location-summary-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .location-summary-label {
+            font-size: 0.75rem;
+            color: #95a5a6;
+            text-transform: uppercase;
+        }
+
+        .location-summary-value {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        .location-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.4s ease, padding 0.4s ease;
+            padding: 0 25px;
+        }
+
+        .location-content.expanded {
+            max-height: 2000px;
+            padding: 25px;
+        }
+
+        .expand-icon {
+            font-size: 1.2rem;
+            color: #3498db;
+            transition: transform 0.3s ease;
+        }
+
+        .location-header.expanded .expand-icon {
+            transform: rotate(180deg);
         }
 
         .panel-title {
@@ -617,6 +773,17 @@
             .system-calculations {
                 grid-template-columns: 1fr 1fr;
             }
+            
+            .location-summary {
+                flex-wrap: wrap;
+                gap: 10px;
+            }
+            
+            .section-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 10px;
+            }
         }
 
         @media (max-width: 768px) {
@@ -669,56 +836,14 @@
             <div id="debugInfo">Debug info will appear here...</div>
         </div>
 
-        <div class="three-phase-panel">
-            <div class="panel-title">3-Phase System Analysis</div>
-            <div class="three-phase-grid">
-                <div class="phase-card">
-                    <div class="phase-label">Phase R (L1)</div>
-                    <div class="phase-value" id="phaseR_voltage">0.0</div>
-                    <div class="phase-unit">V</div>
-                </div>
-                <div class="phase-card">
-                    <div class="phase-label">Phase S (L2)</div>
-                    <div class="phase-value" id="phaseS_voltage">0.0</div>
-                    <div class="phase-unit">V</div>
-                </div>
-                <div class="phase-card">
-                    <div class="phase-label">Phase T (L3)</div>
-                    <div class="phase-value" id="phaseT_voltage">0.0</div>
-                    <div class="phase-unit">V</div>
-                </div>
-                <div class="phase-card">
-                    <div class="phase-label">Neutral</div>
-                    <div class="phase-value" id="neutral_voltage">0.0</div>
-                    <div class="phase-unit">V</div>
-                </div>
+        <!-- Multiple Locations Container -->
+        <div class="locations-section">
+            <div class="section-header">
+                <h2><i class="fas fa-building"></i> Buildings & Locations</h2>
+                <div class="location-count-badge" id="locationCountBadge">0 Locations</div>
             </div>
-            
-            <div class="system-calculations">
-                <div class="calc-card">
-                    <div class="calc-title">Total Active Power</div>
-                    <div class="calc-value"><span id="total_active_power">0.0</span> W</div>
-                </div>
-                <div class="calc-card">
-                    <div class="calc-title">Total Apparent Power</div>
-                    <div class="calc-value"><span id="total_apparent_power">0.0</span> VA</div>
-                </div>
-                <div class="calc-card">
-                    <div class="calc-title">Total Reactive Power</div>
-                    <div class="calc-value"><span id="total_reactive_power">0.0</span> VAR</div>
-                </div>
-                <div class="calc-card">
-                    <div class="calc-title">Power Factor</div>
-                    <div class="calc-value" id="system_power_factor">0.00</div>
-                </div>
-                <div class="calc-card">
-                    <div class="calc-title">Load Imbalance</div>
-                    <div class="calc-value"><span id="load_imbalance">0.0</span> %</div>
-                </div>
-                <div class="calc-card">
-                    <div class="calc-title">System Efficiency</div>
-                    <div class="calc-value"><span id="system_efficiency">0.0</span> %</div>
-                </div>
+            <div id="locationsContainer">
+                <!-- Location panels will be dynamically inserted here -->
             </div>
         </div>
 
@@ -890,7 +1015,12 @@
         let logInterval = null;
         let logStartTime = null;
 
-        // 3-Phase calculations
+        // 3-Phase calculations - now per location
+        let locationsData = {}; // { locationName: { phases: {R, S, T}, totals: {...} } }
+        let locationExpandedState = {}; // { locationName: true/false } - track expand/collapse state
+        let locationPanelsRendered = false; // Track if panels have been initially rendered
+        
+        // Legacy support for single 3-phase panel (if needed)
         let threePhaseData = {
             phases: {
                 R: { voltage: 0, current: 0, power: 0, pf: 0 },
@@ -928,7 +1058,7 @@
             setInterval(refreshData, 30000);
             
             // Update 3-phase calculations every 5 seconds
-            setInterval(update3PhaseCalculations, 5000);
+            setInterval(updateAllLocations, 5000);
         });
 
         // Debug functions
@@ -1076,11 +1206,127 @@
             addDebugLog(`Exported ${logData.length} log entries to CSV`);
         }
 
-        // 3-Phase calculation functions
-        function update3PhaseCalculations() {
-            if (Object.keys(latestData).length === 0) return;
+        // Group devices by location and phase
+        function groupDevicesByLocation() {
+            const grouped = {};
+            const deviceMap = {}; // Map device_address to device info
             
-            // Reset calculations
+            // Build device map from devices array
+            devices.forEach(device => {
+                const deviceAddress = Array.isArray(device) ? device[0] : device.device_address;
+                const location = Array.isArray(device) ? 'Unknown' : (device.location || 'Unknown');
+                const deviceName = Array.isArray(device) ? device[1] : (device.device_name || `Device ${deviceAddress}`);
+                
+                deviceMap[deviceAddress] = {
+                    location: location,
+                    deviceName: deviceName
+                };
+            });
+            
+            // Process all devices from latestData
+            Object.keys(latestData).forEach(deviceAddress => {
+                const deviceData = latestData[deviceAddress];
+                if (!deviceData || typeof deviceData !== 'object') return;
+                
+                // Get location from multiple possible sources (prioritas: location dari devices array > building dari data > Unknown)
+                let location = 'Unknown';
+                if (deviceMap[deviceAddress] && deviceMap[deviceAddress].location && deviceMap[deviceAddress].location !== 'Unknown') {
+                    location = deviceMap[deviceAddress].location;
+                } else if (deviceData.location && deviceData.location !== 'Unknown') {
+                    location = deviceData.location;
+                } else if (deviceData.building) {
+                    location = deviceData.building;
+                } else if (deviceData.building_id) {
+                    location = deviceData.building_id;
+                } else if (deviceMap[deviceAddress]) {
+                    location = deviceMap[deviceAddress].location || 'Unknown';
+                }
+                
+                // Get phase from multiple possible sources (prioritas: phase dari data > phase_id > extract dari name)
+                let phase = null;
+                
+                // 1. Direct phase field from data (most reliable)
+                if (deviceData.phase) {
+                    phase = String(deviceData.phase).toUpperCase().trim();
+                } else if (deviceData.phase_id) {
+                    phase = String(deviceData.phase_id).toUpperCase().trim();
+                }
+                
+                // 2. Try to extract from device name
+                if (!phase) {
+                    const deviceName = deviceMap[deviceAddress]?.deviceName || deviceData.device_name || deviceAddress;
+                    const nameUpper = deviceName.toUpperCase();
+                    
+                    // Check for explicit phase indicators
+                    if (nameUpper.includes('PHASE R') || nameUpper.includes('PHASE-R') || 
+                        nameUpper.includes(' L1') || nameUpper.match(/\bR\b/)) {
+                        phase = 'R';
+                    } else if (nameUpper.includes('PHASE S') || nameUpper.includes('PHASE-S') || 
+                               nameUpper.includes(' L2') || nameUpper.match(/\bS\b/)) {
+                        phase = 'S';
+                    } else if (nameUpper.includes('PHASE T') || nameUpper.includes('PHASE-T') || 
+                               nameUpper.includes(' L3') || nameUpper.match(/\bT\b/)) {
+                        phase = 'T';
+                    }
+                }
+                
+                // 3. Try to extract from device address pattern
+                if (!phase) {
+                    const addrUpper = String(deviceAddress).toUpperCase();
+                    if (addrUpper.includes('R') && !addrUpper.includes('RS') && !addrUpper.includes('RT')) {
+                        phase = 'R';
+                    } else if (addrUpper.includes('S') && !addrUpper.includes('ST')) {
+                        phase = 'S';
+                    } else if (addrUpper.includes('T')) {
+                        phase = 'T';
+                    }
+                }
+                
+                // 4. If still no phase, try to infer from position in sorted list (fallback)
+                if (!phase) {
+                    const sortedDevices = Object.keys(latestData).sort();
+                    const index = sortedDevices.indexOf(deviceAddress);
+                    if (index % 3 === 0) phase = 'R';
+                    else if (index % 3 === 1) phase = 'S';
+                    else if (index % 3 === 2) phase = 'T';
+                }
+                
+                // Only add if we have a valid phase
+                if (phase && ['R', 'S', 'T'].includes(phase)) {
+                    if (!grouped[location]) {
+                        grouped[location] = { R: null, S: null, T: null };
+                    }
+                    
+                    // Only set if not already set, or if this device has more recent data
+                    const existing = grouped[location][phase];
+                    const shouldUpdate = !existing || 
+                        (deviceData.created_at_jakarta && existing.data && 
+                         new Date(deviceData.created_at_jakarta) > new Date(existing.data.created_at_jakarta || 0));
+                    
+                    if (shouldUpdate) {
+                        grouped[location][phase] = {
+                            deviceAddress: deviceAddress,
+                            deviceName: deviceMap[deviceAddress]?.deviceName || deviceData.device_name || `Device ${deviceAddress}`,
+                            data: deviceData
+                        };
+                    }
+                }
+            });
+            
+            // Filter out locations that don't have at least one phase
+            const filtered = {};
+            Object.keys(grouped).forEach(location => {
+                const hasAnyPhase = grouped[location].R || grouped[location].S || grouped[location].T;
+                if (hasAnyPhase) {
+                    filtered[location] = grouped[location];
+                }
+            });
+            
+            return filtered;
+        }
+
+        // Calculate 3-phase metrics for a location
+        function calculateLocationMetrics(locationDevices) {
             const phases = { R: null, S: null, T: null };
             let totalActivePower = 0;
             let totalApparentPower = 0;
@@ -1088,21 +1334,16 @@
             let voltages = [];
             let powers = [];
             
-            // Map devices to phases (assuming first 3 devices are R, S, T)
-            const deviceAddresses = Object.keys(latestData).sort();
-            const phaseNames = ['R', 'S', 'T'];
-            
-            deviceAddresses.slice(0, 3).forEach((deviceAddress, index) => {
-                const deviceData = latestData[deviceAddress];
-                const phaseName = phaseNames[index];
-                
-                if (deviceData) {
+            ['R', 'S', 'T'].forEach(phase => {
+                const phaseDevice = locationDevices[phase];
+                if (phaseDevice && phaseDevice.data) {
+                    const deviceData = phaseDevice.data;
                     const voltage = parseFloat(deviceData.voltage || deviceData.avg_voltage || 0);
                     const current = parseFloat(deviceData.current || deviceData.avg_current || 0);
                     const power = parseFloat(deviceData.power || deviceData.avg_power || 0);
                     const powerFactor = parseFloat(deviceData.power_factor || 0.9);
                     
-                    phases[phaseName] = {
+                    phases[phase] = {
                         voltage: voltage,
                         current: current,
                         power: power,
@@ -1127,15 +1368,14 @@
             const systemPowerFactor = totalApparentPower > 0 ? totalActivePower / totalApparentPower : 0;
             const systemEfficiency = systemPowerFactor * 100;
             
-            // Calculate load imbalance (standard deviation as percentage of average)
+            // Calculate load imbalance
             const avgPower = powers.length > 0 ? powers.reduce((a, b) => a + b, 0) / powers.length : 0;
             const powerVariance = powers.length > 0 ? 
                 powers.reduce((sum, power) => sum + Math.pow(power - avgPower, 2), 0) / powers.length : 0;
             const powerStdDev = Math.sqrt(powerVariance);
             const loadImbalance = avgPower > 0 ? (powerStdDev / avgPower) * 100 : 0;
             
-            // Update global data
-            threePhaseData = {
+            return {
                 phases: phases,
                 totals: {
                     activePower: totalActivePower,
@@ -1146,33 +1386,397 @@
                     efficiency: systemEfficiency
                 }
             };
-            
-            // Update UI
-            update3PhaseUI();
         }
 
-        function update3PhaseUI() {
-            // Update phase displays
-            ['R', 'S', 'T'].forEach((phase, index) => {
-                const phaseData = threePhaseData.phases[phase];
-                if (phaseData) {
-                    document.getElementById(`phase${phase}_voltage`).textContent = phaseData.voltage.toFixed(1);
+        // Update all locations
+        function updateAllLocations() {
+            if (Object.keys(latestData).length === 0) {
+                // Clear panels if no data
+                if (locationPanelsRendered) {
+                    document.getElementById('locationsContainer').innerHTML = '';
+                    locationPanelsRendered = false;
+                    locationExpandedState = {};
+                }
+                return;
+            }
+            
+            const grouped = groupDevicesByLocation();
+            locationsData = {};
+            
+            // Calculate metrics for each location
+            Object.keys(grouped).forEach(location => {
+                locationsData[location] = calculateLocationMetrics(grouped[location]);
+            });
+            
+            // Save current expanded state before update
+            if (locationPanelsRendered) {
+                Object.keys(locationExpandedState).forEach(location => {
+                    const locationId = location.replace(/\s+/g, '-');
+                    const header = document.querySelector(`#location-${locationId} .location-header`);
+                    if (header) {
+                        locationExpandedState[location] = header.classList.contains('expanded');
+                    }
+                });
+            }
+            
+            // Render or update location panels
+            if (!locationPanelsRendered) {
+                renderLocationPanels(grouped);
+                locationPanelsRendered = true;
+            } else {
+                updateLocationPanels(grouped);
+            }
+        }
+
+        // Render location panels with expand/collapse functionality (initial render only)
+        function renderLocationPanels(grouped) {
+            const container = document.getElementById('locationsContainer');
+            const countBadge = document.getElementById('locationCountBadge');
+            const locationCount = Object.keys(grouped).length;
+            
+            // Update location count badge
+            countBadge.textContent = `${locationCount} ${locationCount === 1 ? 'Location' : 'Locations'}`;
+            
+            container.innerHTML = '';
+            
+            if (locationCount === 0) {
+                container.innerHTML = `
+                    <div class="three-phase-panel">
+                        <div class="panel-title">No Location Data Available</div>
+                        <p style="text-align: center; color: #7f8c8d; padding: 20px;">Waiting for device data...</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            // Sort locations alphabetically
+            const sortedLocations = Object.keys(grouped).sort();
+            
+            sortedLocations.forEach((location, index) => {
+                const locationDevices = grouped[location];
+                const metrics = locationsData[location] || { phases: { R: null, S: null, T: null }, totals: {} };
+                
+                // Create panel using helper function
+                createLocationPanel(location, locationDevices, metrics, container);
+                
+                // Auto-expand first location by default (only on initial render)
+                if (index === 0) {
+                    setTimeout(() => {
+                        toggleLocationPanel(location, true);
+                    }, 100);
+                }
+            });
+        }
+
+        // Update existing location panels without re-rendering
+        function updateLocationPanels(grouped) {
+            const container = document.getElementById('locationsContainer');
+            const countBadge = document.getElementById('locationCountBadge');
+            const locationCount = Object.keys(grouped).length;
+            
+            // Update location count badge
+            countBadge.textContent = `${locationCount} ${locationCount === 1 ? 'Location' : 'Locations'}`;
+            
+            // Get current locations in DOM
+            const existingLocations = new Set();
+            container.querySelectorAll('.location-panel').forEach(panel => {
+                const locationName = panel.id.replace('location-', '').replace(/-/g, ' ');
+                existingLocations.add(locationName);
+            });
+            
+            // Get new locations from data
+            const newLocations = new Set(Object.keys(grouped));
+            
+            // Remove locations that no longer exist
+            existingLocations.forEach(location => {
+                if (!newLocations.has(location)) {
+                    const locationId = location.replace(/\s+/g, '-');
+                    const panel = document.getElementById(`location-${locationId}`);
+                    if (panel) {
+                        panel.remove();
+                        delete locationExpandedState[location];
+                    }
                 }
             });
             
-            // Update neutral (calculated as average imbalance)
-            const avgVoltage = Object.values(threePhaseData.phases)
-                .filter(p => p !== null)
-                .reduce((sum, phase) => sum + phase.voltage, 0) / 3;
-            document.getElementById('neutral_voltage').textContent = (240 - avgVoltage).toFixed(1);
+            // Add new locations or update existing ones
+            Object.keys(grouped).forEach(location => {
+                const locationId = location.replace(/\s+/g, '-');
+                const existingPanel = document.getElementById(`location-${locationId}`);
+                const metrics = locationsData[location] || { phases: { R: null, S: null, T: null }, totals: {} };
+                const locationDevices = grouped[location];
+                
+                if (!existingPanel) {
+                    // Create new panel for new location
+                    createLocationPanel(location, locationDevices, metrics, container);
+                } else {
+                    // Update existing panel values only
+                    updateLocationPanelValues(location, locationDevices, metrics, existingPanel);
+                }
+            });
             
-            // Update system calculations
-            document.getElementById('total_active_power').textContent = threePhaseData.totals.activePower.toFixed(1);
-            document.getElementById('total_apparent_power').textContent = threePhaseData.totals.apparentPower.toFixed(1);
-            document.getElementById('total_reactive_power').textContent = threePhaseData.totals.reactivePower.toFixed(1);
-            document.getElementById('system_power_factor').textContent = threePhaseData.totals.powerFactor.toFixed(3);
-            document.getElementById('load_imbalance').textContent = threePhaseData.totals.imbalance.toFixed(1);
-            document.getElementById('system_efficiency').textContent = threePhaseData.totals.efficiency.toFixed(1);
+            // Restore expanded state
+            Object.keys(locationExpandedState).forEach(location => {
+                if (locationExpandedState[location]) {
+                    const locationId = location.replace(/\s+/g, '-');
+                    const header = document.querySelector(`#location-${locationId} .location-header`);
+                    const content = document.getElementById(`location-content-${locationId}`);
+                    if (header && content) {
+                        header.classList.add('expanded');
+                        content.classList.add('expanded');
+                    }
+                }
+            });
+        }
+        
+        // Create a new location panel
+        function createLocationPanel(location, locationDevices, metrics, container) {
+            const locationId = location.replace(/\s+/g, '-');
+            
+            // Count online devices and calculate totals
+            let onlineCount = 0;
+            let totalPower = 0;
+            let totalEnergy = 0;
+            
+            ['R', 'S', 'T'].forEach(phase => {
+                if (locationDevices[phase] && locationDevices[phase].data) {
+                    const deviceData = locationDevices[phase].data;
+                    const timeStr = deviceData.created_at_jakarta || deviceData.created_at || deviceData.timestamp_jakarta || deviceData.timestamp_utc;
+                    if (timeStr) {
+                        const lastSeen = new Date(timeStr);
+                        if (!isNaN(lastSeen.getTime())) {
+                            const timeDiff = Date.now() - lastSeen.getTime();
+                            if (timeDiff < (10 * 60 * 1000)) onlineCount++;
+                        }
+                    }
+                    totalPower += parseFloat(deviceData.power || deviceData.avg_power || 0);
+                    totalEnergy += parseFloat(deviceData.energy || deviceData.total_energy || 0);
+                }
+            });
+            
+            const panel = document.createElement('div');
+            panel.className = 'location-panel';
+            panel.id = `location-${locationId}`;
+            
+            // Create header
+            const header = document.createElement('div');
+            header.className = 'location-header';
+            header.onclick = () => toggleLocationPanel(location);
+            
+            header.innerHTML = `
+                <div class="location-title">
+                    <i class="fas fa-chevron-down expand-icon"></i>
+                    <i class="fas fa-building"></i>
+                    <span>${location}</span>
+                </div>
+                <div class="location-status">
+                    <div class="location-summary">
+                        <div class="location-summary-item">
+                            <div class="location-summary-label">Status</div>
+                            <div class="location-summary-value">
+                                <span class="status-indicator ${onlineCount === 3 ? 'status-online' : onlineCount > 0 ? 'status-online' : 'status-offline'}"></span>
+                                ${onlineCount}/3
+                            </div>
+                        </div>
+                        <div class="location-summary-item">
+                            <div class="location-summary-label">Power</div>
+                            <div class="location-summary-value" id="${locationId}-summary-power">${totalPower.toFixed(1)} W</div>
+                        </div>
+                        <div class="location-summary-item">
+                            <div class="location-summary-label">Energy</div>
+                            <div class="location-summary-value" id="${locationId}-summary-energy">${totalEnergy.toFixed(2)} kWh</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Create content
+            const content = document.createElement('div');
+            content.className = 'location-content';
+            content.id = `location-content-${locationId}`;
+            
+            content.innerHTML = `
+                <div class="three-phase-grid" style="margin-bottom: 20px;">
+                    <div class="phase-card">
+                        <div class="phase-label">Phase R (L1)</div>
+                        <div class="phase-value" id="${location}-phaseR-voltage">${metrics.phases.R ? metrics.phases.R.voltage.toFixed(1) : '0.0'}</div>
+                        <div class="phase-unit">V</div>
+                        ${locationDevices.R ? `
+                            <div style="font-size: 0.7rem; color: #95a5a6; margin-top: 5px;">${locationDevices.R.deviceName}</div>
+                            <div style="font-size: 0.65rem; color: #7f8c8d; margin-top: 3px;" id="${locationId}-phaseR-details">
+                                ${metrics.phases.R ? `${metrics.phases.R.current.toFixed(2)}A | ${metrics.phases.R.power.toFixed(1)}W` : 'N/A'}
+                            </div>
+                        ` : '<div style="font-size: 0.7rem; color: #e74c3c; margin-top: 5px;">Not Connected</div>'}
+                    </div>
+                    <div class="phase-card">
+                        <div class="phase-label">Phase S (L2)</div>
+                        <div class="phase-value" id="${location}-phaseS-voltage">${metrics.phases.S ? metrics.phases.S.voltage.toFixed(1) : '0.0'}</div>
+                        <div class="phase-unit">V</div>
+                        ${locationDevices.S ? `
+                            <div style="font-size: 0.7rem; color: #95a5a6; margin-top: 5px;">${locationDevices.S.deviceName}</div>
+                            <div style="font-size: 0.65rem; color: #7f8c8d; margin-top: 3px;" id="${locationId}-phaseS-details">
+                                ${metrics.phases.S ? `${metrics.phases.S.current.toFixed(2)}A | ${metrics.phases.S.power.toFixed(1)}W` : 'N/A'}
+                            </div>
+                        ` : '<div style="font-size: 0.7rem; color: #e74c3c; margin-top: 5px;">Not Connected</div>'}
+                    </div>
+                    <div class="phase-card">
+                        <div class="phase-label">Phase T (L3)</div>
+                        <div class="phase-value" id="${location}-phaseT-voltage">${metrics.phases.T ? metrics.phases.T.voltage.toFixed(1) : '0.0'}</div>
+                        <div class="phase-unit">V</div>
+                        ${locationDevices.T ? `
+                            <div style="font-size: 0.7rem; color: #95a5a6; margin-top: 5px;">${locationDevices.T.deviceName}</div>
+                            <div style="font-size: 0.65rem; color: #7f8c8d; margin-top: 3px;" id="${locationId}-phaseT-details">
+                                ${metrics.phases.T ? `${metrics.phases.T.current.toFixed(2)}A | ${metrics.phases.T.power.toFixed(1)}W` : 'N/A'}
+                            </div>
+                        ` : '<div style="font-size: 0.7rem; color: #e74c3c; margin-top: 5px;">Not Connected</div>'}
+                    </div>
+                </div>
+                
+                <div class="system-calculations">
+                    <div class="calc-card">
+                        <div class="calc-title">Total Active Power</div>
+                        <div class="calc-value" id="${locationId}-calc-active-power">${(metrics.totals.activePower || 0).toFixed(1)} W</div>
+                    </div>
+                    <div class="calc-card">
+                        <div class="calc-title">Total Apparent Power</div>
+                        <div class="calc-value" id="${locationId}-calc-apparent-power">${(metrics.totals.apparentPower || 0).toFixed(1)} VA</div>
+                    </div>
+                    <div class="calc-card">
+                        <div class="calc-title">Total Reactive Power</div>
+                        <div class="calc-value" id="${locationId}-calc-reactive-power">${(metrics.totals.reactivePower || 0).toFixed(1)} VAR</div>
+                    </div>
+                    <div class="calc-card">
+                        <div class="calc-title">Power Factor</div>
+                        <div class="calc-value" id="${locationId}-calc-power-factor">${(metrics.totals.powerFactor || 0).toFixed(3)}</div>
+                    </div>
+                    <div class="calc-card">
+                        <div class="calc-title">Load Imbalance</div>
+                        <div class="calc-value" id="${locationId}-calc-imbalance">${(metrics.totals.imbalance || 0).toFixed(1)} %</div>
+                    </div>
+                    <div class="calc-card">
+                        <div class="calc-title">System Efficiency</div>
+                        <div class="calc-value" id="${locationId}-calc-efficiency">${(metrics.totals.efficiency || 0).toFixed(1)} %</div>
+                    </div>
+                </div>
+            `;
+            
+            panel.appendChild(header);
+            panel.appendChild(content);
+            container.appendChild(panel);
+            
+            // Initialize expanded state
+            locationExpandedState[location] = false;
+        }
+        
+        // Update values in existing location panel without re-rendering
+        function updateLocationPanelValues(location, locationDevices, metrics, panel) {
+            const locationId = location.replace(/\s+/g, '-');
+            
+            // Update summary values
+            let totalPower = 0;
+            let totalEnergy = 0;
+            let onlineCount = 0;
+            
+            ['R', 'S', 'T'].forEach(phase => {
+                if (locationDevices[phase] && locationDevices[phase].data) {
+                    const deviceData = locationDevices[phase].data;
+                    const timeStr = deviceData.created_at_jakarta || deviceData.created_at || deviceData.timestamp_jakarta || deviceData.timestamp_utc;
+                    if (timeStr) {
+                        const lastSeen = new Date(timeStr);
+                        if (!isNaN(lastSeen.getTime())) {
+                            const timeDiff = Date.now() - lastSeen.getTime();
+                            if (timeDiff < (10 * 60 * 1000)) onlineCount++;
+                        }
+                    }
+                    totalPower += parseFloat(deviceData.power || deviceData.avg_power || 0);
+                    totalEnergy += parseFloat(deviceData.energy || deviceData.total_energy || 0);
+                }
+            });
+            
+            // Update summary
+            const powerEl = document.getElementById(`${locationId}-summary-power`);
+            const energyEl = document.getElementById(`${locationId}-summary-energy`);
+            if (powerEl) powerEl.textContent = `${totalPower.toFixed(1)} W`;
+            if (energyEl) energyEl.textContent = `${totalEnergy.toFixed(2)} kWh`;
+            
+            // Update status indicator
+            const statusIndicator = panel.querySelector('.status-indicator');
+            if (statusIndicator) {
+                statusIndicator.className = `status-indicator ${onlineCount === 3 ? 'status-online' : onlineCount > 0 ? 'status-online' : 'status-offline'}`;
+            }
+            
+            // Update phase values
+            ['R', 'S', 'T'].forEach(phase => {
+                const voltageEl = document.getElementById(`${location}-phase${phase}-voltage`);
+                if (voltageEl && metrics.phases[phase]) {
+                    voltageEl.textContent = metrics.phases[phase].voltage.toFixed(1);
+                }
+                
+                const detailsEl = document.getElementById(`${locationId}-phase${phase}-details`);
+                if (detailsEl && metrics.phases[phase]) {
+                    detailsEl.textContent = `${metrics.phases[phase].current.toFixed(2)}A | ${metrics.phases[phase].power.toFixed(1)}W`;
+                }
+            });
+            
+            // Update calculation values
+            const calcEls = {
+                'active-power': metrics.totals.activePower || 0,
+                'apparent-power': metrics.totals.apparentPower || 0,
+                'reactive-power': metrics.totals.reactivePower || 0,
+                'power-factor': metrics.totals.powerFactor || 0,
+                'imbalance': metrics.totals.imbalance || 0,
+                'efficiency': metrics.totals.efficiency || 0
+            };
+            
+            Object.keys(calcEls).forEach(key => {
+                const el = document.getElementById(`${locationId}-calc-${key}`);
+                if (el) {
+                    if (key === 'power-factor') {
+                        el.textContent = calcEls[key].toFixed(3);
+                    } else if (key === 'imbalance' || key === 'efficiency') {
+                        el.textContent = `${calcEls[key].toFixed(1)} %`;
+                    } else if (key === 'active-power') {
+                        el.textContent = `${calcEls[key].toFixed(1)} W`;
+                    } else if (key === 'apparent-power') {
+                        el.textContent = `${calcEls[key].toFixed(1)} VA`;
+                    } else if (key === 'reactive-power') {
+                        el.textContent = `${calcEls[key].toFixed(1)} VAR`;
+                    }
+                }
+            });
+        }
+
+        // Toggle location panel expand/collapse
+        function toggleLocationPanel(location, forceExpand = false) {
+            const locationId = location.replace(/\s+/g, '-');
+            const header = document.querySelector(`#location-${locationId} .location-header`);
+            const content = document.getElementById(`location-content-${locationId}`);
+            
+            if (!header || !content) return;
+            
+            const isExpanded = header.classList.contains('expanded');
+            
+            if (forceExpand || !isExpanded) {
+                header.classList.add('expanded');
+                content.classList.add('expanded');
+                locationExpandedState[location] = true;
+            } else {
+                header.classList.remove('expanded');
+                content.classList.remove('expanded');
+                locationExpandedState[location] = false;
+            }
+        }
+
+        // Legacy 3-Phase calculation functions (kept for backward compatibility)
+        function update3PhaseCalculations() {
+            updateAllLocations();
+        }
+
+        // Legacy function - now handled by renderLocationPanels
+        function update3PhaseUI() {
+            // This function is now replaced by renderLocationPanels
+            // Kept for backward compatibility
+            updateAllLocations();
         }
 
         // Initialize Socket.IO connection
@@ -1202,7 +1806,7 @@
                 updateDeviceList();
                 updateDataTable();
                 updateComparisonCharts();
-                update3PhaseCalculations();
+                updateAllLocations();
                 
                 if (currentDevice && latestData[currentDevice]) {
                     updateDetailChart();
@@ -1296,11 +1900,82 @@
                 maintainAspectRatio: false,
                 interaction: { intersect: false, mode: 'index' },
                 plugins: {
-                    legend: { position: 'top', labels: { usePointStyle: true, pointStyle: 'circle' } }
+                    legend: { 
+                        position: 'top', 
+                        labels: { 
+                            usePointStyle: true, 
+                            pointStyle: 'circle',
+                            padding: 10
+                        } 
+                    },
+                    tooltip: {
+                        mode: 'index',
+                        intersect: false,
+                        callbacks: {
+                            title: function(context) {
+                                // Format time period for display
+                                const label = context[0].label;
+                                try {
+                                    const date = new Date(label);
+                                    if (!isNaN(date.getTime())) {
+                                        return date.toLocaleString('id-ID', {
+                                            timeZone: 'Asia/Jakarta',
+                                            month: 'short',
+                                            day: 'numeric',
+                                            hour: '2-digit',
+                                            minute: '2-digit'
+                                        });
+                                    }
+                                } catch (e) {
+                                    // Fallback to original label
+                                }
+                                return label;
+                            }
+                        }
+                    }
                 },
                 scales: {
-                    x: { display: true, title: { display: true, text: 'Time' } },
-                    y: { display: true, title: { display: true, text: yAxisTitle } }
+                    x: { 
+                        display: true, 
+                        title: { display: true, text: 'Time' },
+                        ticks: {
+                            maxRotation: 45,
+                            minRotation: 45,
+                            callback: function(value, index) {
+                                // Format only some labels to avoid clutter
+                                const label = this.getLabelForValue(value);
+                                try {
+                                    const date = new Date(label);
+                                    if (!isNaN(date.getTime())) {
+                                        // Show formatted time for every Nth label
+                                        const showCount = Math.ceil(this.chart.data.labels.length / 10);
+                                        if (index % showCount === 0 || index === this.chart.data.labels.length - 1) {
+                                            return date.toLocaleString('id-ID', {
+                                                timeZone: 'Asia/Jakarta',
+                                                month: 'short',
+                                                day: 'numeric',
+                                                hour: '2-digit',
+                                                minute: '2-digit'
+                                            });
+                                        }
+                                    }
+                                } catch (e) {
+                                    // Fallback to original label
+                                }
+                                return '';
+                            }
+                        }
+                    },
+                    y: { 
+                        display: true, 
+                        title: { display: true, text: yAxisTitle },
+                        beginAtZero: false
+                    }
+                },
+                elements: {
+                    line: {
+                        spanGaps: true // Enable gap spanning at chart level
+                    }
                 }
             };
         }
@@ -1390,40 +2065,94 @@
                 addDebugLog(`Devices API response: ${devicesData.length} devices`);
                 
                 const deviceSelect = document.getElementById('deviceSelect');
-                deviceSelect.innerHTML = '<option value="">All Devices</option>';
+                deviceSelect.innerHTML = '<option value="">All Buildings</option>';
                 
                 if (Array.isArray(devicesData)) {
                     devices = devicesData;
                     
+                    // Extract unique buildings/locations
+                    const buildingsMap = new Map();
+                    
                     devices.forEach(device => {
-                        let deviceAddress, deviceName, dataCount;
+                        let deviceAddress, deviceName, location, dataCount;
                         
                         if (Array.isArray(device)) {
                             deviceAddress = device[0];
                             deviceName = device[1] || `Device ${device[0]}`;
+                            location = 'Unknown';
                             dataCount = device[2] || 0;
                         } else {
                             deviceAddress = device.device_address;
                             deviceName = device.device_name || `Device ${device.device_address}`;
+                            location = device.location || 'Unknown';
                             dataCount = device.data_count || device.total_records || 0;
                         }
                         
+                        // Extract building name from location or device name
+                        let buildingName = location;
+                        if (buildingName === 'Unknown' || !buildingName || buildingName.trim() === '') {
+                            // Try to extract from device name (e.g., "Phase R - CKPG5" -> "CKPG5")
+                            // Pattern: "Phase X - BUILDING" or "Phase X BUILDING" or just "BUILDING"
+                            const patterns = [
+                                /Phase\s+[RST]\s*-\s*([A-Z0-9]+)/i,  // "Phase R - CKPG5"
+                                /Phase\s+[RST]\s+([A-Z0-9]+)/i,      // "Phase R CKPG5"
+                                /-\s*([A-Z0-9]+)\s*$/,               // "- CKPG5" at end
+                                /\b([A-Z]{2,}[0-9]*)\b/              // Any uppercase letters+numbers
+                            ];
+                            
+                            for (const pattern of patterns) {
+                                const match = deviceName.match(pattern);
+                                if (match && match[1]) {
+                                    buildingName = match[1].trim();
+                                    break;
+                                }
+                            }
+                            
+                            if (buildingName === 'Unknown' || !buildingName || buildingName.trim() === '') {
+                                buildingName = 'Unknown';
+                            }
+                        }
+                        
+                        // Group by building and count total records
+                        if (!buildingsMap.has(buildingName)) {
+                            buildingsMap.set(buildingName, {
+                                name: buildingName,
+                                totalRecords: 0,
+                                deviceCount: 0
+                            });
+                        }
+                        buildingsMap.get(buildingName).totalRecords += dataCount;
+                        buildingsMap.get(buildingName).deviceCount += 1;
+                    });
+                    
+                    // Populate dropdown with buildings only
+                    const sortedBuildings = Array.from(buildingsMap.entries())
+                        .filter(([name]) => name !== 'Unknown')
+                        .sort(([a], [b]) => a.localeCompare(b));
+                    
+                    sortedBuildings.forEach(([buildingName, info]) => {
                         const option = document.createElement('option');
-                        option.value = deviceAddress;
-                        option.textContent = `${deviceName} (${dataCount} records)`;
+                        option.value = buildingName;
+                        option.textContent = `${buildingName} (${info.totalRecords} records)`;
                         deviceSelect.appendChild(option);
                         
-                        addDebugLog(`Added device option: ${deviceAddress} - ${deviceName}`);
+                        addDebugLog(`Added building option: ${buildingName} - ${info.totalRecords} records`);
                     });
+                    
+                    // Add "All Buildings" option if there are multiple buildings
+                    if (sortedBuildings.length === 0) {
+                        deviceSelect.innerHTML = '<option value="">No buildings found</option>';
+                    }
                 } else {
                     addDebugLog('Invalid devices data format');
-                    deviceSelect.innerHTML = '<option value="">No devices found</option>';
+                    deviceSelect.innerHTML = '<option value="">No buildings found</option>';
                 }
 
                 await loadLatestData();
                 updateDeviceList();
                 updateDataTable();
                 updateComparisonCharts();
+                updateAllLocations();
                 
             } catch (error) {
                 console.error('Error loading devices:', error);
@@ -1480,12 +2209,28 @@
                 allDevicesData.forEach(deviceData => {
                     deviceData.data.forEach(item => {
                         if (item.time_period) {
-                            allLabels.add(item.time_period);
+                            // Normalize time_period to string
+                            allLabels.add(String(item.time_period));
                         }
                     });
                 });
                 
-                const commonLabels = Array.from(allLabels).sort();
+                // Sort labels chronologically (ISO format strings sort correctly)
+                const commonLabels = Array.from(allLabels).sort((a, b) => {
+                    // Try to parse as dates for proper chronological sorting
+                    try {
+                        const dateA = new Date(a);
+                        const dateB = new Date(b);
+                        if (!isNaN(dateA.getTime()) && !isNaN(dateB.getTime())) {
+                            return dateA - dateB;
+                        }
+                    } catch (e) {
+                        // Fallback to string comparison
+                    }
+                    return a.localeCompare(b);
+                });
+                
+                addDebugLog(`Prepared ${commonLabels.length} common time labels for comparison charts`);
                 
                 // Limit labels for performance (max 200 points)
                 if (commonLabels.length > 200) {
@@ -1503,87 +2248,147 @@
                 const currentDatasets = [];
                 const powerDatasets = [];
                 
-                allDevicesData.forEach((deviceData, index) => {
-                    const color = deviceColors[index % deviceColors.length];
+                // Define phase colors (R=red, S=blue, T=green)
+                const phaseColors = {
+                    'R': '#e74c3c', // Red
+                    'S': '#3498db', // Blue
+                    'T': '#27ae60'  // Green
+                };
+                
+                // Sort by phase order (R, S, T)
+                const sortedData = allDevicesData.sort((a, b) => {
+                    const phaseOrder = { 'R': 0, 'S': 1, 'T': 2 };
+                    const aPhase = a.phase || 'R';
+                    const bPhase = b.phase || 'R';
+                    return (phaseOrder[aPhase] || 99) - (phaseOrder[bPhase] || 99);
+                });
+                
+                sortedData.forEach((deviceData) => {
+                    const phase = deviceData.phase || 'R';
+                    const building = deviceData.building || '';
                     const deviceAddress = deviceData.device_address;
+                    const color = phaseColors[phase] || deviceColors[0];
+                    
+                    addDebugLog(`Processing Phase ${phase} for ${building} (${deviceAddress}): ${deviceData.data.length} data points`);
                     
                     // Create data maps for efficient lookup
                     const dataMap = new Map();
                     deviceData.data.forEach(item => {
                         if (item.time_period) {
-                            dataMap.set(item.time_period, item);
+                            // Normalize time_period to string for consistent matching
+                            const timeKey = String(item.time_period);
+                            dataMap.set(timeKey, item);
                         }
                     });
                     
-                    // Create aligned data arrays
+                    // Create aligned data arrays - use null for missing data points
+                    // spanGaps will connect them
                     const voltageData = commonLabels.map(label => {
-                        const item = dataMap.get(label);
-                        return item ? parseFloat(item.voltage || 0) : null;
+                        const timeKey = String(label);
+                        const item = dataMap.get(timeKey);
+                        if (item && item.voltage !== null && item.voltage !== undefined) {
+                            const value = parseFloat(item.voltage);
+                            return isNaN(value) ? null : value;
+                        }
+                        return null; // Missing data point
                     });
                     
                     const currentData = commonLabels.map(label => {
-                        const item = dataMap.get(label);
-                        return item ? parseFloat(item.current || 0) : null;
+                        const timeKey = String(label);
+                        const item = dataMap.get(timeKey);
+                        if (item && item.current !== null && item.current !== undefined) {
+                            const value = parseFloat(item.current);
+                            return isNaN(value) ? null : value;
+                        }
+                        return null; // Missing data point
                     });
                     
                     const powerData = commonLabels.map(label => {
-                        const item = dataMap.get(label);
-                        return item ? parseFloat(item.power || 0) : null;
+                        const timeKey = String(label);
+                        const item = dataMap.get(timeKey);
+                        if (item && item.power !== null && item.power !== undefined) {
+                            const value = parseFloat(item.power);
+                            return isNaN(value) ? null : value;
+                        }
+                        return null; // Missing data point
                     });
                     
+                    // Count non-null values for debugging
+                    const voltageCount = voltageData.filter(v => v !== null).length;
+                    const currentCount = currentData.filter(v => v !== null).length;
+                    const powerCount = powerData.filter(v => v !== null).length;
+                    addDebugLog(`Phase ${phase}: ${voltageCount} voltage, ${currentCount} current, ${powerCount} power data points`);
+                    
+                    // Create label with phase and building
+                    const label = building ? `Phase ${phase} - ${building}` : `Phase ${phase}`;
+                    
                     voltageDatasets.push({
-                        label: `Phase ${String.fromCharCode(82 + index)} (${deviceAddress})`, // R, S, T
+                        label: label,
                         data: voltageData,
                         borderColor: color,
                         backgroundColor: color + '20',
                         tension: 0.4,
                         fill: false,
+                        spanGaps: true, // Connect gaps in data
                         pointRadius: commonLabels.length > 100 ? 0 : 2, // Hide points for dense data
-                        borderWidth: commonLabels.length > 100 ? 1 : 2
+                        borderWidth: commonLabels.length > 100 ? 1 : 2,
+                        pointHoverRadius: 4
                     });
                     
                     currentDatasets.push({
-                        label: `Phase ${String.fromCharCode(82 + index)} (${deviceAddress})`,
+                        label: label,
                         data: currentData,
                         borderColor: color,
                         backgroundColor: color + '20',
                         tension: 0.4,
                         fill: false,
+                        spanGaps: true, // Connect gaps in data
                         pointRadius: commonLabels.length > 100 ? 0 : 2,
-                        borderWidth: commonLabels.length > 100 ? 1 : 2
+                        borderWidth: commonLabels.length > 100 ? 1 : 2,
+                        pointHoverRadius: 4
                     });
                     
                     powerDatasets.push({
-                        label: `Phase ${String.fromCharCode(82 + index)} (${deviceAddress})`,
+                        label: label,
                         data: powerData,
                         borderColor: color,
                         backgroundColor: color + '20',
                         tension: 0.4,
                         fill: false,
+                        spanGaps: true, // Connect gaps in data
                         pointRadius: commonLabels.length > 100 ? 0 : 2,
-                        borderWidth: commonLabels.length > 100 ? 1 : 2
+                        borderWidth: commonLabels.length > 100 ? 1 : 2,
+                        pointHoverRadius: 4
                     });
                 });
                 
                 // Update charts with optimized settings
+                addDebugLog(`Updating charts: ${voltageDatasets.length} voltage datasets, ${currentDatasets.length} current datasets, ${powerDatasets.length} power datasets`);
+                
+                // Update voltage chart
                 voltageChart.data.labels = commonLabels;
                 voltageChart.data.datasets = voltageDatasets;
                 voltageChart.update('none'); // No animation for performance
+                addDebugLog(`Voltage chart updated with ${voltageDatasets.length} datasets, ${commonLabels.length} labels`);
                 
+                // Update current chart
                 currentChart.data.labels = commonLabels;
                 currentChart.data.datasets = currentDatasets;
                 currentChart.update('none');
+                addDebugLog(`Current chart updated with ${currentDatasets.length} datasets, ${commonLabels.length} labels`);
                 
+                // Update power chart
                 powerChart.data.labels = commonLabels;
                 powerChart.data.datasets = powerDatasets;
                 powerChart.update('none');
+                addDebugLog(`Power chart updated with ${powerDatasets.length} datasets, ${commonLabels.length} labels`);
                 
                 // Restore opacity
                 document.getElementById('voltageChart').style.opacity = '1';
                 document.getElementById('currentChart').style.opacity = '1';
                 document.getElementById('powerChart').style.opacity = '1';
                 
-                addDebugLog(`Updated comparison charts with ${commonLabels.length} data points for ${allDevicesData.length} devices`);
+                addDebugLog(`Updated comparison charts with ${commonLabels.length} data points for ${allDevicesData.length} phases`);
                 
             } catch (error) {
                 console.error('Error updating comparison charts:', error);
@@ -1596,24 +2401,66 @@
             }
         }
 
-        // Get chart data for all devices
+        // Get chart data for phases (R, S, T) of selected building
         async function getAllDevicesChartData() {
-            const deviceAddresses = Object.keys(latestData);
+            const selectedBuilding = currentDevice || ''; // currentDevice now contains building name
             const allData = [];
             
-            for (const deviceAddress of deviceAddresses.slice(0, 5)) { // Limit to 5 devices for readability
-                try {
-                    const response = await fetch(`/api/chart/${deviceAddress}?period=${currentPeriod}`);
-                    const data = await response.json();
-                    
-                    if (data && data.length > 0) {
-                        allData.push({
-                            device_address: deviceAddress,
-                            data: data
-                        });
+            // Check if latestData is available
+            if (!latestData || Object.keys(latestData).length === 0) {
+                addDebugLog('No latest data available for comparison charts');
+                return allData;
+            }
+            
+            // Group devices by location to find phases for selected building
+            const grouped = groupDevicesByLocation();
+            
+            if (Object.keys(grouped).length === 0) {
+                addDebugLog('No grouped devices found for comparison charts');
+                return allData;
+            }
+            
+            // If no building selected, show first building's phases
+            let targetBuilding = selectedBuilding;
+            if (!targetBuilding || targetBuilding === '') {
+                const firstBuilding = Object.keys(grouped)[0];
+                if (firstBuilding) {
+                    targetBuilding = firstBuilding;
+                    addDebugLog(`No building selected, showing first building: ${targetBuilding}`);
+                } else {
+                    addDebugLog('No buildings available for comparison');
+                    return allData;
+                }
+            }
+            
+            // Get phases for target building
+            const buildingPhases = grouped[targetBuilding];
+            if (!buildingPhases) {
+                addDebugLog(`Building ${targetBuilding} not found in grouped data`);
+                return allData;
+            }
+            
+            const phaseOrder = ['R', 'S', 'T'];
+            
+            for (const phase of phaseOrder) {
+                if (buildingPhases[phase] && buildingPhases[phase].deviceAddress) {
+                    const deviceAddress = buildingPhases[phase].deviceAddress;
+                    try {
+                        const response = await fetch(`/api/chart/${deviceAddress}?period=${currentPeriod}`);
+                        const data = await response.json();
+                        
+                        if (data && data.length > 0) {
+                            allData.push({
+                                device_address: deviceAddress,
+                                phase: phase,
+                                building: targetBuilding,
+                                data: data
+                            });
+                            addDebugLog(`Loaded chart data for Phase ${phase} of ${targetBuilding} (${deviceAddress})`);
+                        }
+                    } catch (error) {
+                        addDebugLog(`Error loading chart data for device ${deviceAddress}: ${error.message}`);
                     }
-                } catch (error) {
-                    addDebugLog(`Error loading chart data for device ${deviceAddress}: ${error.message}`);
                 }
             }
             
@@ -1861,7 +2708,8 @@
         // Event handlers
         function onDeviceChange() {
             currentDevice = document.getElementById('deviceSelect').value;
-            addDebugLog(`Device changed to: ${currentDevice || 'All Devices'}`);
+            addDebugLog(`Building changed to: ${currentDevice || 'All Buildings'}`);
+            updateComparisonCharts(); // Update comparison charts when building changes
             updateDetailChart();
             updateDeviceList();
         }
@@ -1881,7 +2729,7 @@
             await loadSystemStatus();
             await loadDevices();
             updateComparisonCharts();
-            update3PhaseCalculations();
+            updateAllLocations();
             if (currentDevice) {
                 await updateDetailChart();
             }

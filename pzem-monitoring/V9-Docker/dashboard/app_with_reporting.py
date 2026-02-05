@@ -17,6 +17,7 @@ from decimal import Decimal
 import os
 from psycopg2.pool import SimpleConnectionPool
 import pytz
+import re
 
 # Timezone Jakarta
 JAKARTA_TZ = pytz.timezone('Asia/Jakarta')
@@ -400,39 +401,43 @@ class DatabaseManager:
             conn = self.get_connection()
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             
-            # Query dengan konversi timezone yang benar
+            # Query dengan konversi timezone yang benar dan include building/phase dari pzem_devices
             query = """
-            SELECT DISTINCT ON (device_address) 
-                device_address,
-                COALESCE(voltage, 0) as voltage,
-                COALESCE(current, 0) as current,
-                COALESCE(power, 0) as power,
-                COALESCE(energy, 0) as energy,
-                COALESCE(frequency, 50.0) as frequency,
-                COALESCE(power_factor, 1.0) as power_factor,
-                wifi_rssi,
-                device_timestamp,
-                device_status,
-                data_quality,
-                timestamp_utc,
-                created_at,
+            SELECT DISTINCT ON (d.device_address) 
+                d.device_address,
+                COALESCE(d.voltage, 0) as voltage,
+                COALESCE(d.current, 0) as current,
+                COALESCE(d.power, 0) as power,
+                COALESCE(d.energy, 0) as energy,
+                COALESCE(d.frequency, 50.0) as frequency,
+                COALESCE(d.power_factor, 1.0) as power_factor,
+                d.wifi_rssi,
+                d.device_timestamp,
+                d.device_status,
+                d.data_quality,
+                d.timestamp_utc,
+                d.created_at,
                 -- Konversi timezone untuk Jakarta
-                created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jakarta' as created_at_jakarta,
+                d.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jakarta' as created_at_jakarta,
                 CASE 
-                    WHEN timestamp_utc IS NOT NULL 
-                    THEN timestamp_utc AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jakarta'
-                    ELSE created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jakarta'
+                    WHEN d.timestamp_utc IS NOT NULL 
+                    THEN d.timestamp_utc AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jakarta'
+                    ELSE d.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jakarta'
                 END as timestamp_jakarta,
                 -- Hitung apakah device online (data dalam 10 menit terakhir)
                 CASE 
-                    WHEN created_at >= NOW() - INTERVAL '10 minutes' THEN true
+                    WHEN d.created_at >= NOW() - INTERVAL '10 minutes' THEN true
                     ELSE false
                 END as is_online,
                 -- Hitung selisih waktu dalam menit
-                EXTRACT(EPOCH FROM (NOW() - created_at))/60 as minutes_since_last_data
-            FROM pzem_data 
-            WHERE created_at >= NOW() - INTERVAL '24 hours'
-            ORDER BY device_address, created_at DESC
+                EXTRACT(EPOCH FROM (NOW() - d.created_at))/60 as minutes_since_last_data,
+                -- Include location (building) dari pzem_devices
+                COALESCE(dm.location, 'Unknown') as location,
+                COALESCE(dm.device_name, 'Device ' || d.device_address) as device_name
+            FROM pzem_data d
+            LEFT JOIN pzem_devices dm ON d.device_address = dm.device_address
+            WHERE d.created_at >= NOW() - INTERVAL '24 hours'
+            ORDER BY d.device_address, d.created_at DESC
             """
             
             cursor.execute(query)
@@ -469,6 +474,20 @@ class DatabaseManager:
                     # Status informasi
                     device_data['online_status'] = device_data['is_online']
                     device_data['last_seen_minutes'] = float(device_data['minutes_since_last_data'] or 0)
+                    
+                    # Add building alias (location is the building)
+                    if device_data.get('location') and device_data['location'] != 'Unknown':
+                        device_data['building'] = device_data['location']
+                        device_data['building_id'] = device_data['location']
+                    
+                    # Extract phase from device_name if available
+                    device_name = device_data.get('device_name', '')
+                    if device_name:
+                        # Try to extract phase from device name (e.g., "Phase S - CKPG5")
+                        phase_match = re.search(r'Phase\s+([RST])', device_name, re.IGNORECASE)
+                        if phase_match:
+                            device_data['phase'] = phase_match.group(1).upper()
+                            device_data['phase_id'] = phase_match.group(1).upper()
                     
                     # Serialize data
                     serialized_data = self.serialize_data(device_data)
