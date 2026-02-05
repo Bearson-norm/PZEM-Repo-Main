@@ -110,6 +110,35 @@ jobs:
         echo "📦 Files to include in package:"
         echo "$FILES_TO_INCLUDE"
         
+        # Verify dashboard.html exists and has new functions BEFORE packaging
+        echo "🔍 Pre-packaging verification..."
+        if [ -f "dashboard/templates/dashboard.html" ]; then
+          DASHBOARD_SIZE=$(wc -c < dashboard/templates/dashboard.html)
+          DASHBOARD_LINES=$(wc -l < dashboard/templates/dashboard.html)
+          UPDATE_PANELS=$(grep -c "updateLocationPanels" dashboard/templates/dashboard.html || echo "0")
+          GROUP_DEVICES=$(grep -c "groupDevicesByLocation" dashboard/templates/dashboard.html || echo "0")
+          LOCATIONS=$(grep -c "locationsContainer" dashboard/templates/dashboard.html || echo "0")
+          
+          echo "   📄 dashboard.html stats:"
+          echo "      - Size: $DASHBOARD_SIZE bytes"
+          echo "      - Lines: $DASHBOARD_LINES"
+          echo "      - updateLocationPanels: $UPDATE_PANELS"
+          echo "      - groupDevicesByLocation: $GROUP_DEVICES"
+          echo "      - locationsContainer: $LOCATIONS"
+          
+          if [ "$UPDATE_PANELS" -eq 0 ] || [ "$GROUP_DEVICES" -eq 0 ] || [ "$LOCATIONS" -eq 0 ]; then
+            echo "   ⚠️  WARNING: New functions not found in source file!"
+            echo "      This package will contain outdated code"
+            echo "      Current commit: $(git rev-parse HEAD 2>/dev/null || echo 'unknown')"
+            echo "      File last modified: $(git log -1 --format=%ai dashboard/templates/dashboard.html 2>/dev/null || echo 'unknown')"
+          else
+            echo "   ✅ Source file verified - contains all new functions"
+          fi
+        else
+          echo "   ❌ ERROR: dashboard.html not found in source!"
+          exit 1
+        fi
+        
         # Create tar archive with excludes before files
         tar -czf ../../${PACKAGE_NAME} \
           --exclude='*.pyc' \
@@ -121,9 +150,27 @@ jobs:
           --exclude='.git' \
           $FILES_TO_INCLUDE
         
+        # Verify package was created and check size
+        PACKAGE_SIZE=$(wc -c < ../../${PACKAGE_NAME})
+        echo "📦 Package created: ${PACKAGE_NAME}"
+        echo "   - Package size: $PACKAGE_SIZE bytes"
+        
+        if [ "$PACKAGE_SIZE" -lt 10000 ]; then
+          echo "   ⚠️  WARNING: Package seems too small!"
+          exit 1
+        fi
+        
+        # Verify dashboard.html is in package
+        echo "🔍 Verifying dashboard.html in package..."
+        tar -tzf ../../${PACKAGE_NAME} | grep -q "dashboard/templates/dashboard.html" || {
+          echo "   ❌ ERROR: dashboard.html not found in package!"
+          exit 1
+        }
+        echo "   ✅ dashboard.html found in package"
+        
         cd ../..
         echo "PACKAGE_NAME=${PACKAGE_NAME}" >> $GITHUB_ENV
-        echo "✅ Package created: ${PACKAGE_NAME}"
+        echo "✅ Package created and verified: ${PACKAGE_NAME}"
 
     - name: Upload package to VPS
       run: |
@@ -249,23 +296,54 @@ jobs:
         
         # Verify dashboard.html is not empty and has correct content
         DASHBOARD_SIZE=$(wc -c < "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html")
+        DASHBOARD_LINES=$(wc -l < "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html")
+        
         if [ "$DASHBOARD_SIZE" -lt 1000 ]; then
           echo "❌ ERROR: dashboard.html seems too small ($DASHBOARD_SIZE bytes)"
           exit 1
         fi
         
-        # Check for duplicate code (the bug we're fixing)
+        echo "📊 dashboard.html stats:"
+        echo "   - Size: $DASHBOARD_SIZE bytes"
+        echo "   - Lines: $DASHBOARD_LINES"
+        echo "   - Location: ${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html"
+        
+        # Check for new functions (updateLocationPanels, groupDevicesByLocation, etc.)
+        echo "🔍 Verifying new functions..."
+        UPDATE_LOCATION_PANELS=$(grep -c "updateLocationPanels" "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html" || echo "0")
+        GROUP_DEVICES=$(grep -c "groupDevicesByLocation" "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html" || echo "0")
+        LOCATIONS_CONTAINER=$(grep -c "locationsContainer" "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html" || echo "0")
+        LOCATION_EXPANDED_STATE=$(grep -c "locationExpandedState" "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html" || echo "0")
+        
+        echo "   - updateLocationPanels: $UPDATE_LOCATION_PANELS occurrences"
+        echo "   - groupDevicesByLocation: $GROUP_DEVICES occurrences"
+        echo "   - locationsContainer: $LOCATIONS_CONTAINER occurrences"
+        echo "   - locationExpandedState: $LOCATION_EXPANDED_STATE occurrences"
+        
+        # Verify new functions exist (should be > 0 for updated version)
+        if [ "$UPDATE_LOCATION_PANELS" -eq 0 ] || [ "$GROUP_DEVICES" -eq 0 ] || [ "$LOCATIONS_CONTAINER" -eq 0 ]; then
+          echo "⚠️  WARNING: New functions not found in extracted file!"
+          echo "   This may indicate the file is outdated or package was created from old code"
+          echo "   - updateLocationPanels: $UPDATE_LOCATION_PANELS (expected > 0)"
+          echo "   - groupDevicesByLocation: $GROUP_DEVICES (expected > 0)"
+          echo "   - locationsContainer: $LOCATIONS_CONTAINER (expected > 0)"
+          echo ""
+          echo "   Checking file timestamp..."
+          ls -lh "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html"
+          echo ""
+          echo "   ⚠️  Continuing deployment, but file may need manual update"
+        else
+          echo "✅ All new functions verified in extracted file"
+        fi
+        
+        # Check for duplicate code (old bug check)
         DUPLICATE_COUNT=$(grep -c "powerChart.data.labels = commonLabels" "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html" || echo "0")
         if [ "$DUPLICATE_COUNT" -gt 1 ]; then
           echo "⚠️  WARNING: Found $DUPLICATE_COUNT instances of duplicate code in dashboard.html"
           echo "   This may indicate the file wasn't updated correctly"
-        else
-          echo "✅ dashboard.html verified (no duplicate code found)"
         fi
         
-        echo "✅ Files extracted successfully"
-        echo "   - dashboard.html size: $DASHBOARD_SIZE bytes"
-        echo "   - Location: ${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html"
+        echo "✅ Files extracted and verified"
         
         # Restore .env if exists and backup directory is available
         if [ -n "${BACKUP_DIR}" ] && [ -f "${BACKUP_DIR}/.env.backup."* ] 2>/dev/null; then
@@ -420,13 +498,31 @@ jobs:
         echo "🔍 Verifying dashboard.html in running container..."
         if $DOCKER_COMPOSE exec -T dashboard test -f /app/templates/dashboard.html 2>/dev/null; then
           CONTAINER_LINE_COUNT=$($DOCKER_COMPOSE exec -T dashboard wc -l < /app/templates/dashboard.html 2>/dev/null || echo "0")
-          echo "✅ dashboard.html exists in container with $CONTAINER_LINE_COUNT lines"
+          CONTAINER_SIZE=$($DOCKER_COMPOSE exec -T dashboard wc -c < /app/templates/dashboard.html 2>/dev/null || echo "0")
+          echo "✅ dashboard.html exists in container"
+          echo "   - Size: $CONTAINER_SIZE bytes"
+          echo "   - Lines: $CONTAINER_LINE_COUNT"
           
-          # Check if file has the fix (no duplicate code)
-          CONTAINER_DUPLICATE_COUNT=$($DOCKER_COMPOSE exec -T dashboard grep -c "powerChart.data.labels = commonLabels" /app/templates/dashboard.html 2>/dev/null || echo "0")
-          if [ "$CONTAINER_DUPLICATE_COUNT" -eq 1 ]; then
-            echo "✅ dashboard.html in container is correct (no duplicate code)"
+          # Check for new functions in container
+          CONTAINER_UPDATE_PANELS=$($DOCKER_COMPOSE exec -T dashboard grep -c "updateLocationPanels" /app/templates/dashboard.html 2>/dev/null || echo "0")
+          CONTAINER_GROUP_DEVICES=$($DOCKER_COMPOSE exec -T dashboard grep -c "groupDevicesByLocation" /app/templates/dashboard.html 2>/dev/null || echo "0")
+          CONTAINER_LOCATIONS=$($DOCKER_COMPOSE exec -T dashboard grep -c "locationsContainer" /app/templates/dashboard.html 2>/dev/null || echo "0")
+          
+          echo "   - updateLocationPanels: $CONTAINER_UPDATE_PANELS"
+          echo "   - groupDevicesByLocation: $CONTAINER_GROUP_DEVICES"
+          echo "   - locationsContainer: $CONTAINER_LOCATIONS"
+          
+          if [ "$CONTAINER_UPDATE_PANELS" -gt 0 ] && [ "$CONTAINER_GROUP_DEVICES" -gt 0 ] && [ "$CONTAINER_LOCATIONS" -gt 0 ]; then
+            echo "✅ dashboard.html in container has all new functions"
           else
+            echo "⚠️  WARNING: New functions missing in container!"
+            echo "   This may indicate volume mount issue or file not synced"
+            echo "   Try: docker-compose restart dashboard"
+          fi
+          
+          # Check for duplicate code (old bug check)
+          CONTAINER_DUPLICATE_COUNT=$($DOCKER_COMPOSE exec -T dashboard grep -c "powerChart.data.labels = commonLabels" /app/templates/dashboard.html 2>/dev/null || echo "0")
+          if [ "$CONTAINER_DUPLICATE_COUNT" -gt 1 ]; then
             echo "⚠️  WARNING: Found $CONTAINER_DUPLICATE_COUNT instances in container (expected 1)"
           fi
         else
