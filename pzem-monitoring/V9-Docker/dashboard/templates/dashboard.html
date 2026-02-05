@@ -841,7 +841,7 @@
             <div class="section-header">
                 <h2><i class="fas fa-building"></i> Buildings & Locations</h2>
                 <div class="location-count-badge" id="locationCountBadge">0 Locations</div>
-            </div>
+                </div>
             <div id="locationsContainer">
                 <!-- Location panels will be dynamically inserted here -->
             </div>
@@ -2445,21 +2445,21 @@
             for (const phase of phaseOrder) {
                 if (buildingPhases[phase] && buildingPhases[phase].deviceAddress) {
                     const deviceAddress = buildingPhases[phase].deviceAddress;
-                    try {
-                        const response = await fetch(`/api/chart/${deviceAddress}?period=${currentPeriod}`);
-                        const data = await response.json();
-                        
-                        if (data && data.length > 0) {
-                            allData.push({
-                                device_address: deviceAddress,
+                try {
+                    const response = await fetch(`/api/chart/${deviceAddress}?period=${currentPeriod}`);
+                    const data = await response.json();
+                    
+                    if (data && data.length > 0) {
+                        allData.push({
+                            device_address: deviceAddress,
                                 phase: phase,
                                 building: targetBuilding,
-                                data: data
-                            });
+                            data: data
+                        });
                             addDebugLog(`Loaded chart data for Phase ${phase} of ${targetBuilding} (${deviceAddress})`);
-                        }
-                    } catch (error) {
-                        addDebugLog(`Error loading chart data for device ${deviceAddress}: ${error.message}`);
+                    }
+                } catch (error) {
+                    addDebugLog(`Error loading chart data for device ${deviceAddress}: ${error.message}`);
                     }
                 }
             }
