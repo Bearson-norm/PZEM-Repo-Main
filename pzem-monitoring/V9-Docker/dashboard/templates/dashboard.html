@@ -1046,20 +1046,67 @@
 
         // Initialize the dashboard
         document.addEventListener('DOMContentLoaded', function() {
-            initializeSocketIO();
-            initializeCharts();
-            loadSystemStatus();
-            loadDevices();
+            addDebugLog('🚀 Dashboard initialization started...');
+            
+            try {
+                initializeSocketIO();
+                addDebugLog('✅ Socket.IO initialized');
+            } catch (error) {
+                addDebugLog(`❌ Socket.IO initialization failed: ${error.message}`);
+            }
+            
+            try {
+                initializeCharts();
+                addDebugLog('✅ Charts initialized');
+            } catch (error) {
+                addDebugLog(`❌ Charts initialization failed: ${error.message}`);
+            }
             
             // Set up event listeners
-            document.getElementById('deviceSelect').addEventListener('change', onDeviceChange);
-            document.getElementById('periodSelect').addEventListener('change', onPeriodChange);
+            try {
+                const deviceSelect = document.getElementById('deviceSelect');
+                const periodSelect = document.getElementById('periodSelect');
+                
+                if (deviceSelect) {
+                    deviceSelect.addEventListener('change', onDeviceChange);
+                    addDebugLog('✅ Device select listener added');
+                } else {
+                    addDebugLog('⚠️ deviceSelect element not found');
+                }
+                
+                if (periodSelect) {
+                    periodSelect.addEventListener('change', onPeriodChange);
+                    addDebugLog('✅ Period select listener added');
+                } else {
+                    addDebugLog('⚠️ periodSelect element not found');
+                }
+            } catch (error) {
+                addDebugLog(`❌ Error setting up event listeners: ${error.message}`);
+            }
+            
+            // Load initial data
+            addDebugLog('Loading initial data...');
+            Promise.all([
+                loadSystemStatus().catch(e => addDebugLog(`System status load failed: ${e.message}`)),
+                loadDevices().catch(e => addDebugLog(`Devices load failed: ${e.message}`))
+            ]).then(() => {
+                addDebugLog('✅ Initial data loading completed');
+            }).catch(error => {
+                addDebugLog(`❌ Initial data loading failed: ${error.message}`);
+            });
             
             // Auto refresh every 30 seconds
-            setInterval(refreshData, 30000);
+            setInterval(() => {
+                addDebugLog('🔄 Auto-refresh triggered');
+                refreshData().catch(e => addDebugLog(`Auto-refresh failed: ${e.message}`));
+            }, 30000);
             
             // Update 3-phase calculations every 5 seconds
-            setInterval(updateAllLocations, 5000);
+            setInterval(() => {
+                updateAllLocations();
+            }, 5000);
+            
+            addDebugLog('✅ Dashboard initialization completed');
         });
 
         // Debug functions
@@ -2005,13 +2052,30 @@
         // Load system status
         async function loadSystemStatus() {
             try {
+                addDebugLog('Fetching system status from /api/system-status...');
                 const response = await fetch('/api/system-status');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
                 const data = await response.json();
+                addDebugLog(`System status API response: ${JSON.stringify(data).substring(0, 200)}`);
+                
                 updateSystemStatusDisplay(data);
-                addDebugLog(`System status loaded: ${data.total_devices || 0} total, ${data.online_devices || 0} online`);
+                addDebugLog(`✅ System status loaded: ${data.total_devices || 0} total, ${data.online_devices || 0} online`);
             } catch (error) {
                 console.error('Error loading system status:', error);
-                addDebugLog(`Error loading system status: ${error.message}`);
+                addDebugLog(`❌ Error loading system status: ${error.message}`);
+                addDebugLog(`Stack: ${error.stack}`);
+                
+                // Set default values on error
+                updateSystemStatusDisplay({
+                    total_devices: 0,
+                    online_devices: 0,
+                    total_power: 0,
+                    total_energy: 0
+                });
             }
         }
 
@@ -2081,10 +2145,19 @@
         // Load devices
         async function loadDevices() {
             try {
+                addDebugLog('Fetching devices from /api/devices...');
                 const response = await fetch('/api/devices');
-                const devicesData = await response.json();
                 
-                addDebugLog(`Devices API response: ${devicesData.length} devices`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const devicesData = await response.json();
+                addDebugLog(`Devices API response received: ${Array.isArray(devicesData) ? devicesData.length : 'not an array'} items`);
+                
+                if (Array.isArray(devicesData) && devicesData.length > 0) {
+                    addDebugLog(`First device sample: ${JSON.stringify(devicesData[0]).substring(0, 200)}`);
+                }
                 
                 const deviceSelect = document.getElementById('deviceSelect');
                 deviceSelect.innerHTML = '<option value="">All Buildings</option>';
@@ -2178,21 +2251,55 @@
                 
             } catch (error) {
                 console.error('Error loading devices:', error);
-                addDebugLog(`Error loading devices: ${error.message}`);
-                document.getElementById('deviceSelect').innerHTML = '<option value="">Error loading devices</option>';
+                addDebugLog(`❌ Error loading devices: ${error.message}`);
+                addDebugLog(`Stack: ${error.stack}`);
+                
+                const deviceSelect = document.getElementById('deviceSelect');
+                if (deviceSelect) {
+                    deviceSelect.innerHTML = '<option value="">Error loading devices</option>';
+                }
+                
+                // Still try to load latest data even if devices fail
+                try {
+                    await loadLatestData();
+                } catch (e) {
+                    addDebugLog(`❌ Also failed to load latest data: ${e.message}`);
+                }
             }
         }
 
         // Load latest data for all devices
         async function loadLatestData() {
             try {
+                addDebugLog('Fetching latest data from /api/all-latest...');
                 const response = await fetch('/api/all-latest');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
                 const data = await response.json();
-                latestData = data || {};
-                addDebugLog(`Latest data loaded: ${Object.keys(latestData).length} devices`);
+                addDebugLog(`Latest data API response received: ${typeof data === 'object' ? Object.keys(data).length : 'invalid format'} devices`);
+                
+                if (data && typeof data === 'object') {
+                    latestData = data;
+                    const deviceCount = Object.keys(latestData).length;
+                    addDebugLog(`✅ Latest data loaded: ${deviceCount} devices`);
+                    
+                    if (deviceCount > 0) {
+                        const firstDevice = Object.keys(latestData)[0];
+                        addDebugLog(`Sample device data (${firstDevice}): ${JSON.stringify(latestData[firstDevice]).substring(0, 200)}`);
+                    } else {
+                        addDebugLog('⚠️ No device data found in response');
+                    }
+                } else {
+                    addDebugLog('⚠️ Invalid data format received, using empty object');
+                    latestData = {};
+                }
             } catch (error) {
                 console.error('Error loading latest data:', error);
-                addDebugLog(`Error loading latest data: ${error.message}`);
+                addDebugLog(`❌ Error loading latest data: ${error.message}`);
+                addDebugLog(`Stack: ${error.stack}`);
                 latestData = {};
             }
         }
@@ -2200,29 +2307,39 @@
         // Update comparison charts with all devices
         async function updateComparisonCharts() {
             try {
-                addDebugLog('Updating comparison charts...');
+                addDebugLog(`Updating comparison charts (period: ${currentPeriod})...`);
                 
                 // Show loading state
-                document.getElementById('voltageChart').style.opacity = '0.5';
-                document.getElementById('currentChart').style.opacity = '0.5';
-                document.getElementById('powerChart').style.opacity = '0.5';
+                const voltageChartEl = document.getElementById('voltageChart');
+                const currentChartEl = document.getElementById('currentChart');
+                const powerChartEl = document.getElementById('powerChart');
+                
+                if (voltageChartEl) voltageChartEl.style.opacity = '0.5';
+                if (currentChartEl) currentChartEl.style.opacity = '0.5';
+                if (powerChartEl) powerChartEl.style.opacity = '0.5';
                 
                 // Get data for all devices for comparison
                 const allDevicesData = await getAllDevicesChartData();
                 
+                addDebugLog(`Received ${allDevicesData.length} device datasets for comparison charts`);
+                
                 if (allDevicesData.length === 0) {
+                    addDebugLog('No data available for comparison charts - clearing charts');
                     // Clear charts if no data
                     [voltageChart, currentChart, powerChart].forEach(chart => {
-                        chart.data.labels = [];
-                        chart.data.datasets = [];
-                        chart.update('none'); // No animation for clearing
+                        if (chart) {
+                            chart.data.labels = [];
+                            chart.data.datasets = [];
+                            chart.update('none'); // No animation for clearing
+                        }
                     });
                     
                     // Restore opacity
-                    document.getElementById('voltageChart').style.opacity = '1';
-                    document.getElementById('currentChart').style.opacity = '1';
-                    document.getElementById('powerChart').style.opacity = '1';
+                    if (voltageChartEl) voltageChartEl.style.opacity = '1';
+                    if (currentChartEl) currentChartEl.style.opacity = '1';
+                    if (powerChartEl) powerChartEl.style.opacity = '1';
                     
+                    addDebugLog('Charts cleared due to no data');
                     return;
                 }
 
@@ -2406,26 +2523,30 @@
                 addDebugLog(`Power chart updated with ${powerDatasets.length} datasets, ${commonLabels.length} labels`);
                 
                 // Restore opacity
-                document.getElementById('voltageChart').style.opacity = '1';
-                document.getElementById('currentChart').style.opacity = '1';
-                document.getElementById('powerChart').style.opacity = '1';
+                if (voltageChartEl) voltageChartEl.style.opacity = '1';
+                if (currentChartEl) currentChartEl.style.opacity = '1';
+                if (powerChartEl) powerChartEl.style.opacity = '1';
                 
-                addDebugLog(`Updated comparison charts with ${commonLabels.length} data points for ${allDevicesData.length} phases`);
+                addDebugLog(`✅ Successfully updated comparison charts: ${commonLabels.length} time points, ${allDevicesData.length} phases`);
                 
             } catch (error) {
                 console.error('Error updating comparison charts:', error);
-                addDebugLog(`Error updating comparison charts: ${error.message}`);
+                addDebugLog(`❌ Error updating comparison charts: ${error.message}`);
+                addDebugLog(`Stack trace: ${error.stack}`);
                 
                 // Restore opacity on error
-                document.getElementById('voltageChart').style.opacity = '1';
-                document.getElementById('currentChart').style.opacity = '1';
-                document.getElementById('powerChart').style.opacity = '1';
+                const voltageChartEl = document.getElementById('voltageChart');
+                const currentChartEl = document.getElementById('currentChart');
+                const powerChartEl = document.getElementById('powerChart');
+                
+                if (voltageChartEl) voltageChartEl.style.opacity = '1';
+                if (currentChartEl) currentChartEl.style.opacity = '1';
+                if (powerChartEl) powerChartEl.style.opacity = '1';
             }
         }
 
         // Get chart data for phases (R, S, T) of selected building
         async function getAllDevicesChartData() {
-            const selectedBuilding = currentDevice || ''; // currentDevice now contains building name
             const allData = [];
             
             // Check if latestData is available
@@ -2442,8 +2563,54 @@
                 return allData;
             }
             
+            // Determine target building from currentDevice or deviceSelect
+            let targetBuilding = '';
+            
+            // Check if currentDevice is a building name (from deviceSelect)
+            const deviceSelect = document.getElementById('deviceSelect');
+            const selectedValue = deviceSelect ? deviceSelect.value : '';
+            
+            if (selectedValue && selectedValue !== '') {
+                // Check if selectedValue is a building name (exists in grouped)
+                if (grouped[selectedValue]) {
+                    targetBuilding = selectedValue;
+                    addDebugLog(`Using selected building from deviceSelect: ${targetBuilding}`);
+                } else {
+                    // selectedValue might be a device address, find its building
+                    for (const [building, phases] of Object.entries(grouped)) {
+                        for (const phase of ['R', 'S', 'T']) {
+                            if (phases[phase] && phases[phase].deviceAddress === selectedValue) {
+                                targetBuilding = building;
+                                addDebugLog(`Found building for device ${selectedValue}: ${targetBuilding}`);
+                                break;
+                            }
+                        }
+                        if (targetBuilding) break;
+                    }
+                }
+            }
+            
+            // If still no building found, use currentDevice as building name
+            if (!targetBuilding && currentDevice && currentDevice !== '') {
+                if (grouped[currentDevice]) {
+                    targetBuilding = currentDevice;
+                    addDebugLog(`Using currentDevice as building: ${targetBuilding}`);
+                } else {
+                    // currentDevice might be a device address, find its building
+                    for (const [building, phases] of Object.entries(grouped)) {
+                        for (const phase of ['R', 'S', 'T']) {
+                            if (phases[phase] && phases[phase].deviceAddress === currentDevice) {
+                                targetBuilding = building;
+                                addDebugLog(`Found building for currentDevice ${currentDevice}: ${targetBuilding}`);
+                                break;
+                            }
+                        }
+                        if (targetBuilding) break;
+                    }
+                }
+            }
+            
             // If no building selected, show first building's phases
-            let targetBuilding = selectedBuilding;
             if (!targetBuilding || targetBuilding === '') {
                 const firstBuilding = Object.keys(grouped)[0];
                 if (firstBuilding) {
@@ -2464,28 +2631,44 @@
             
             const phaseOrder = ['R', 'S', 'T'];
             
+            addDebugLog(`Fetching chart data for building ${targetBuilding} with period=${currentPeriod}`);
+            
             for (const phase of phaseOrder) {
                 if (buildingPhases[phase] && buildingPhases[phase].deviceAddress) {
                     const deviceAddress = buildingPhases[phase].deviceAddress;
-                try {
-                    const response = await fetch(`/api/chart/${deviceAddress}?period=${currentPeriod}`);
-                    const data = await response.json();
-                    
-                    if (data && data.length > 0) {
-                        allData.push({
-                            device_address: deviceAddress,
+                    try {
+                        const url = `/api/chart/${deviceAddress}?period=${currentPeriod}`;
+                        addDebugLog(`Fetching: ${url}`);
+                        const response = await fetch(url);
+                        
+                        if (!response.ok) {
+                            addDebugLog(`HTTP error for ${deviceAddress}: ${response.status} ${response.statusText}`);
+                            continue;
+                        }
+                        
+                        const data = await response.json();
+                        
+                        if (data && Array.isArray(data) && data.length > 0) {
+                            allData.push({
+                                device_address: deviceAddress,
                                 phase: phase,
                                 building: targetBuilding,
-                            data: data
-                        });
-                            addDebugLog(`Loaded chart data for Phase ${phase} of ${targetBuilding} (${deviceAddress})`);
+                                data: data
+                            });
+                            addDebugLog(`Loaded chart data for Phase ${phase} of ${targetBuilding} (${deviceAddress}): ${data.length} points`);
+                        } else {
+                            addDebugLog(`No data returned for Phase ${phase} of ${targetBuilding} (${deviceAddress})`);
+                        }
+                    } catch (error) {
+                        console.error(`Error loading chart data for device ${deviceAddress}:`, error);
+                        addDebugLog(`Error loading chart data for device ${deviceAddress}: ${error.message}`);
                     }
-                } catch (error) {
-                    addDebugLog(`Error loading chart data for device ${deviceAddress}: ${error.message}`);
-                    }
+                } else {
+                    addDebugLog(`Phase ${phase} not available for building ${targetBuilding}`);
                 }
             }
             
+            addDebugLog(`getAllDevicesChartData completed: ${allData.length} phases loaded`);
             return allData;
         }
 
@@ -2737,12 +2920,24 @@
         }
 
         function onPeriodChange() {
-            currentPeriod = document.getElementById('periodSelect').value;
+            const periodSelect = document.getElementById('periodSelect');
+            if (!periodSelect) {
+                addDebugLog('Period selector not found');
+                return;
+            }
+            
+            currentPeriod = periodSelect.value;
             addDebugLog(`Period changed to: ${currentPeriod}`);
+            
+            // Always update comparison charts when period changes
             updateComparisonCharts();
+            
+            // Update detail chart if a device is selected
             if (currentDevice) {
                 updateDetailChart();
             }
+            
+            addDebugLog(`Period change handler completed for period: ${currentPeriod}`);
         }
 
         // Refresh all data

@@ -8,6 +8,8 @@ from flask import Flask, render_template, jsonify, request
 from flask_socketio import SocketIO, emit
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from psycopg2 import errors as psycopg2_errors
+from psycopg2 import extensions as psycopg2_extensions
 import json
 from datetime import datetime, timedelta
 import threading
@@ -128,8 +130,36 @@ class DatabaseManager:
             logger.error(f"[ERROR] Database connection error: {e}")
     
     def get_connection(self):
+        """Get database connection with error recovery"""
         if self.connection is None or self.connection.closed:
             self.connect()
+        else:
+            # Check if connection is in error state and reset it
+            try:
+                # Try a simple query to check connection health
+                cursor = self.connection.cursor()
+                cursor.execute("SELECT 1")
+                cursor.close()
+            except (psycopg2.OperationalError, psycopg2.InterfaceError, psycopg2.InternalError) as e:
+                # Connection is broken, reconnect
+                logger.warning(f"Connection error detected, reconnecting: {e}")
+                try:
+                    self.connection.close()
+                except:
+                    pass
+                self.connect()
+            except psycopg2_errors.InFailedSqlTransaction:
+                # Transaction is in error state, rollback
+                logger.warning("Transaction in error state, rolling back")
+                try:
+                    self.connection.rollback()
+                except:
+                    # If rollback fails, reconnect
+                    try:
+                        self.connection.close()
+                    except:
+                        pass
+                    self.connect()
         return self.connection
     
     def serialize_data(self, data):
@@ -208,8 +238,34 @@ class DatabaseManager:
             self._set_cache(cache_key, result)
             return result
             
+        except psycopg2_errors.InFailedSqlTransaction as e:
+            logger.error(f"Transaction error in get_system_status: {e}")
+            try:
+                conn = self.get_connection()
+                conn.rollback()
+                logger.info("Transaction rolled back successfully in get_system_status")
+            except Exception as rollback_error:
+                logger.error(f"Error during rollback in get_system_status: {rollback_error}")
+            error_result = {
+                'total_devices': 0,
+                'online_devices': 0,
+                'total_active_power': 0,
+                'total_energy': 0,
+                'jakarta_time': datetime.now(self.jakarta_tz).isoformat(),
+                'timezone': 'Asia/Jakarta'
+            }
+            return error_result
         except Exception as e:
             logger.error(f"Error getting system status: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
+            # Try to rollback transaction if connection exists
+            try:
+                conn = self.get_connection()
+                if conn.status == psycopg2_extensions.STATUS_IN_TRANSACTION:
+                    conn.rollback()
+                    logger.info("Transaction rolled back after error in get_system_status")
+            except:
+                pass
             error_result = {
                 'total_devices': 0,
                 'online_devices': 0,
@@ -262,8 +318,25 @@ class DatabaseManager:
             # Cache the result
             self._set_cache(cache_key, result)
             return result
+        except psycopg2_errors.InFailedSqlTransaction as e:
+            logger.error(f"Transaction error in get_devices: {e}")
+            try:
+                if conn:
+                    conn.rollback()
+                    logger.info("Transaction rolled back successfully in get_devices")
+            except Exception as rollback_error:
+                logger.error(f"Error during rollback in get_devices: {rollback_error}")
+            return []
         except Exception as e:
             logger.error(f"[ERROR] Error getting devices: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
+            # Try to rollback transaction if connection exists
+            try:
+                if conn and conn.status == psycopg2_extensions.STATUS_IN_TRANSACTION:
+                    conn.rollback()
+                    logger.info("Transaction rolled back after error in get_devices")
+            except:
+                pass
             return []
         finally:
             if conn:
@@ -443,6 +516,8 @@ class DatabaseManager:
             cursor.execute(query)
             data = cursor.fetchall()
             cursor.close()
+            # Commit transaction to ensure data consistency
+            conn.commit()
             
             logger.info(f"Retrieved {len(data)} devices from database")
             
@@ -505,8 +580,27 @@ class DatabaseManager:
             self._set_cache(cache_key, result)
             return result
             
+        except psycopg2_errors.InFailedSqlTransaction as e:
+            logger.error(f"Transaction error in get_all_latest_data: {e}")
+            try:
+                conn = self.get_connection()
+                conn.rollback()
+                logger.info("Transaction rolled back successfully")
+            except Exception as rollback_error:
+                logger.error(f"Error during rollback: {rollback_error}")
+            return {}
         except Exception as e:
             logger.error(f"Error getting all latest data: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
+            logger.error(f"Error details: {str(e)}")
+            # Try to rollback transaction if connection exists
+            try:
+                conn = self.get_connection()
+                if conn.status == psycopg2_extensions.STATUS_IN_TRANSACTION:
+                    conn.rollback()
+                    logger.info("Transaction rolled back after error")
+            except:
+                pass
             return {}
 
     def get_three_phase_summary(self):
