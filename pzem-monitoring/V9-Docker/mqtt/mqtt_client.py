@@ -343,9 +343,27 @@ class MQTTClient:
         # Set keepalive and other options
         self.client.keep_alive = 60
         
+        # Set connection timeout
+        self.client.connect_timeout = 10
+        
+        # Enable automatic reconnect
+        self.client.reconnect_delay_set(min_delay=1, max_delay=120)
+        
         # Enable logging
         self.client.enable_logger(logger)
         
+    def subscribe_to_topics(self, client):
+        """Subscribe ke semua topics - dapat dipanggil dari on_connect atau reconnect"""
+        for topic in MQTT_TOPICS:
+            try:
+                result = client.subscribe(topic, MQTT_QOS)
+                if result[0] == mqtt.MQTT_ERR_SUCCESS:
+                    logger.info(f"[SUCCESS] Subscribed to topic: {topic} (QoS: {MQTT_QOS})")
+                else:
+                    logger.error(f"[ERROR] Failed to subscribe to topic: {topic}, error code: {result[0]}")
+            except Exception as e:
+                logger.error(f"[ERROR] Exception while subscribing to {topic}: {e}")
+
     def on_connect(self, client, userdata, flags, rc, properties=None):
         """Callback ketika koneksi berhasil/gagal"""
         if rc == 0:
@@ -353,12 +371,7 @@ class MQTTClient:
             logger.info(f"[SUCCESS] Connected to MQTT broker {MQTT_BROKER}:{MQTT_PORT}")
             
             # Subscribe ke semua topics
-            for topic in MQTT_TOPICS:
-                result = client.subscribe(topic, MQTT_QOS)
-                if result[0] == mqtt.MQTT_ERR_SUCCESS:
-                    logger.info(f"[SUCCESS] Subscribed to topic: {topic} (QoS: {MQTT_QOS})")
-                else:
-                    logger.error(f"[ERROR] Failed to subscribe to topic: {topic}")
+            self.subscribe_to_topics(client)
         else:
             self.connected = False
             error_messages = {
@@ -381,8 +394,9 @@ class MQTTClient:
             self.message_count += 1
             self.last_message_time = datetime.now()
             
-            # Log basic message info
-            logger.info(f"[MESSAGE #{self.message_count}] Topic: {msg.topic}")
+            # Log basic message info dengan timestamp Jakarta
+            jakarta_time = datetime.now(JAKARTA_TZ)
+            logger.info(f"[MESSAGE #{self.message_count}] Topic: {msg.topic} at {jakarta_time.strftime('%Y-%m-%d %H:%M:%S')} WIB")
             
             # Extract building and phase from topic
             building = None
@@ -465,8 +479,17 @@ class MQTTClient:
             else:
                 logger.warning("[DATABASE] Data save failed")
             
+        except json.JSONDecodeError as json_err:
+            logger.error(f"[ERROR] JSON decode error in on_message: {json_err}")
+            logger.error(f"[ERROR] Payload preview: {msg.payload[:200] if msg.payload else 'None'}...")
+        except UnicodeDecodeError as unicode_err:
+            logger.error(f"[ERROR] Unicode decode error: {unicode_err}")
+            logger.error(f"[ERROR] Payload bytes: {msg.payload[:100] if msg.payload else 'None'}...")
         except Exception as e:
             logger.error(f"[ERROR] Error processing message: {e}")
+            logger.error(f"[ERROR] Exception type: {type(e).__name__}")
+            import traceback
+            logger.error(f"[ERROR] Traceback: {traceback.format_exc()}")
 
     def on_disconnect(self, client, userdata, flags, rc, properties=None):
         """Callback ketika terputus"""
@@ -495,6 +518,17 @@ class MQTTClient:
                 
                 # Wait a bit to see if connection succeeds
                 time.sleep(2)
+                
+                # Verify loop is running (check if thread exists and is alive)
+                try:
+                    if hasattr(self.client, '_thread'):
+                        if not self.client._thread or not self.client._thread.is_alive():
+                            logger.warning("[WARNING] MQTT loop thread not running, restarting...")
+                            self.client.loop_stop()
+                            time.sleep(1)
+                            self.client.loop_start()
+                except Exception as thread_check_err:
+                    logger.debug(f"[DEBUG] Could not verify loop thread status: {thread_check_err}")
                 
                 if self.connected:
                     logger.info("[SUCCESS] Connected to MQTT broker")
@@ -526,11 +560,40 @@ class MQTTClient:
                 # Print status setiap 60 detik
                 if current_time - last_status_time > 60:
                     status = "Connected" if self.connected else "Disconnected"
-                    logger.info(f"[STATUS] {status} | Messages received: {self.message_count}")
+                    jakarta_now = datetime.now(JAKARTA_TZ)
+                    logger.info(f"[STATUS] {status} | Messages received: {self.message_count} | Time: {jakarta_now.strftime('%Y-%m-%d %H:%M:%S')} WIB")
                     
                     if self.last_message_time:
                         time_since_last = datetime.now() - self.last_message_time
-                        logger.info(f"[STATUS] Last message: {time_since_last.total_seconds():.0f} seconds ago")
+                        seconds_ago = time_since_last.total_seconds()
+                        logger.info(f"[STATUS] Last message: {seconds_ago:.0f} seconds ago")
+                        
+                        # Warning jika tidak ada pesan dalam 5 menit
+                        if seconds_ago > 300:
+                            logger.warning(f"[WARNING] No messages received for {seconds_ago:.0f} seconds ({seconds_ago/60:.1f} minutes)")
+                            logger.warning(f"[WARNING] Connection status: {self.connected}, checking connection health...")
+                            
+                            # Check if client is actually connected
+                            try:
+                                # Check connection status - is_connected() might not exist in all versions
+                                if hasattr(self.client, 'is_connected'):
+                                    is_conn = self.client.is_connected()
+                                else:
+                                    # Fallback: check if connected flag is set and socket exists
+                                    is_conn = self.connected and hasattr(self.client, '_sock') and self.client._sock is not None
+                                
+                                if is_conn:
+                                    logger.info("[INFO] MQTT client reports connected, but no messages received")
+                                    logger.info("[INFO] This might indicate: 1) No messages published to subscribed topics, 2) Network issues, 3) Broker not forwarding messages")
+                                else:
+                                    logger.warning("[WARNING] MQTT client reports NOT connected")
+                                    self.connected = False
+                            except Exception as check_err:
+                                logger.error(f"[ERROR] Error checking connection status: {check_err}")
+                                # Assume disconnected if we can't check
+                                self.connected = False
+                    else:
+                        logger.warning("[WARNING] No messages received yet")
                     
                     last_status_time = current_time
                 
@@ -538,10 +601,35 @@ class MQTTClient:
                 if not self.connected:
                     logger.warning("[RECONNECTING] Attempting to reconnect...")
                     try:
+                        # Stop loop sebelum reconnect
+                        self.client.loop_stop()
+                        time.sleep(1)
+                        
+                        # Reconnect
                         self.client.reconnect()
-                        time.sleep(10)
+                        
+                        # Restart loop
+                        self.client.loop_start()
+                        
+                        # Wait untuk connection dan subscription
+                        time.sleep(3)
+                        
+                        # Pastikan subscribe ulang jika sudah connected
+                        if self.connected:
+                            logger.info("[RECONNECT] Reconnected successfully, resubscribing to topics...")
+                            self.subscribe_to_topics(self.client)
+                        else:
+                            logger.warning("[RECONNECT] Reconnection attempt completed but not connected yet")
+                            time.sleep(5)
                     except Exception as reconnect_error:
                         logger.warning(f"[RETRY] Reconnection failed: {reconnect_error}")
+                        logger.warning(f"[RETRY] Error details: {type(reconnect_error).__name__}: {str(reconnect_error)}")
+                        # Pastikan loop tetap berjalan
+                        try:
+                            if not self.client.loop_start.called:
+                                self.client.loop_start()
+                        except:
+                            pass
                         time.sleep(10)  # Wait before next retry
                 
                 time.sleep(1)

@@ -1008,6 +1008,7 @@
         let currentPeriod = 'hour';
         let devices = [];
         let latestData = {};
+        let lastDataUpdateTime = null; // Track actual last data update time
         
         // Logging variables
         let isLogging = false;
@@ -1792,6 +1793,27 @@
             socket.on('data_update', function(data) {
                 console.log('Received data_update:', data);
                 addDebugLog('Data update received');
+                
+                // Track actual data update time
+                if (data.timestamp || data.server_time) {
+                    // Try to parse timestamp from server
+                    try {
+                        if (data.timestamp) {
+                            lastDataUpdateTime = new Date(data.timestamp);
+                        } else if (data.server_time) {
+                            // Parse server_time format: "HH:MM:SS WIB"
+                            const now = new Date();
+                            const [timeStr] = data.server_time.split(' ');
+                            const [hours, minutes, seconds] = timeStr.split(':').map(Number);
+                            lastDataUpdateTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, seconds);
+                        }
+                    } catch (e) {
+                        console.warn('Could not parse timestamp:', e);
+                        lastDataUpdateTime = new Date(); // Fallback to current time
+                    }
+                } else {
+                    lastDataUpdateTime = new Date(); // Fallback to current time
+                }
                 
                 // Handle both old format (direct device data) and new format (with devices key)
                 if (data.devices) {
@@ -2760,14 +2782,46 @@
         }
 
         function updateLastUpdate() {
-            const now = new Date();
-            const jakartaTime = now.toLocaleString('id-ID', {
-                timeZone: 'Asia/Jakarta',
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit'
-            });
-            document.getElementById('lastUpdate').textContent = `Last update: ${jakartaTime} WIB`;
+            let displayTime;
+            
+            if (lastDataUpdateTime) {
+                // Show actual last data update time
+                const jakartaTime = lastDataUpdateTime.toLocaleString('id-ID', {
+                    timeZone: 'Asia/Jakarta',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit'
+                });
+                
+                // Calculate time since last update
+                const timeDiff = Date.now() - lastDataUpdateTime.getTime();
+                const secondsAgo = Math.floor(timeDiff / 1000);
+                const minutesAgo = Math.floor(secondsAgo / 60);
+                
+                let timeAgoStr = '';
+                if (secondsAgo < 60) {
+                    timeAgoStr = `${secondsAgo} detik lalu`;
+                } else if (minutesAgo < 60) {
+                    timeAgoStr = `${minutesAgo} menit lalu`;
+                } else {
+                    const hoursAgo = Math.floor(minutesAgo / 60);
+                    timeAgoStr = `${hoursAgo} jam lalu`;
+                }
+                
+                displayTime = `${jakartaTime} WIB (${timeAgoStr})`;
+            } else {
+                // Fallback to current time if no data received yet
+                const now = new Date();
+                const jakartaTime = now.toLocaleString('id-ID', {
+                    timeZone: 'Asia/Jakarta',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit'
+                });
+                displayTime = `${jakartaTime} WIB (menunggu data...)`;
+            }
+            
+            document.getElementById('lastUpdate').textContent = `Last update: ${displayTime}`;
         }
     </script>
 </body>
