@@ -475,6 +475,8 @@ class DatabaseManager:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             
             # Query dengan konversi timezone yang benar dan include building/phase dari pzem_devices
+            # Removed 24-hour filter to show latest data regardless of when it was received
+            # Using DISTINCT ON ensures we get the most recent data per device
             query = """
             SELECT DISTINCT ON (d.device_address) 
                 d.device_address,
@@ -509,7 +511,6 @@ class DatabaseManager:
                 COALESCE(dm.device_name, 'Device ' || d.device_address) as device_name
             FROM pzem_data d
             LEFT JOIN pzem_devices dm ON d.device_address = dm.device_address
-            WHERE d.created_at >= NOW() - INTERVAL '24 hours'
             ORDER BY d.device_address, d.created_at DESC
             """
             
@@ -519,7 +520,15 @@ class DatabaseManager:
             # Commit transaction to ensure data consistency
             conn.commit()
             
-            logger.info(f"Retrieved {len(data)} devices from database")
+            logger.info(f"Retrieved {len(data)} devices from database (no time filter - showing all latest data)")
+            
+            # Log sample of device addresses and locations for debugging
+            if data:
+                sample_devices = data[:5]  # First 5 devices
+                for row in sample_devices:
+                    logger.debug(f"Device: {row['device_address']}, Location: {row.get('location', 'Unknown')}, "
+                               f"Last seen: {row.get('created_at_jakarta', 'N/A')}, "
+                               f"Online: {row.get('is_online', False)}")
             
             result = {}
             for row in data:
@@ -617,13 +626,12 @@ class DatabaseManager:
             conn = self.get_connection()
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             
-            # Get latest data from last hour for stability
+            # Get latest data per device (no time filter to show all devices)
             query = """
             WITH latest_data AS (
                 SELECT DISTINCT ON (device_address) 
                     device_address, power, voltage, current, power_factor, energy
                 FROM pzem_data 
-                WHERE created_at >= NOW() - INTERVAL '1 hour'
                 ORDER BY device_address, created_at DESC
             )
             SELECT 

@@ -1449,11 +1449,38 @@
             }
             
             const grouped = groupDevicesByLocation();
+            
+            // Filter by selected building if a building is selected
+            const deviceSelect = document.getElementById('deviceSelect');
+            const selectedValue = deviceSelect ? deviceSelect.value : '';
+            let filteredGrouped = grouped;
+            
+            if (selectedValue && selectedValue !== '' && grouped[selectedValue]) {
+                // Only show selected building
+                filteredGrouped = { [selectedValue]: grouped[selectedValue] };
+                addDebugLog(`Filtering locations to show only building: ${selectedValue}`);
+            } else if (selectedValue && selectedValue !== '') {
+                // Check if selectedValue is a device address, find its building
+                for (const [building, phases] of Object.entries(grouped)) {
+                    for (const phase of ['R', 'S', 'T']) {
+                        if (phases[phase] && phases[phase].deviceAddress === selectedValue) {
+                            filteredGrouped = { [building]: grouped[building] };
+                            addDebugLog(`Filtering locations to show building of device ${selectedValue}: ${building}`);
+                            break;
+                        }
+                    }
+                    if (Object.keys(filteredGrouped).length === 1 && Object.keys(filteredGrouped)[0] !== selectedValue) break;
+                }
+            } else {
+                // Show all buildings
+                addDebugLog('Showing all buildings');
+            }
+            
             locationsData = {};
             
             // Calculate metrics for each location
-            Object.keys(grouped).forEach(location => {
-                locationsData[location] = calculateLocationMetrics(grouped[location]);
+            Object.keys(filteredGrouped).forEach(location => {
+                locationsData[location] = calculateLocationMetrics(filteredGrouped[location]);
             });
             
             // Save current expanded state before update
@@ -1469,10 +1496,10 @@
             
             // Render or update location panels
             if (!locationPanelsRendered) {
-                renderLocationPanels(grouped);
+                renderLocationPanels(filteredGrouped);
                 locationPanelsRendered = true;
             } else {
-                updateLocationPanels(grouped);
+                updateLocationPanels(filteredGrouped);
             }
         }
 
@@ -2688,9 +2715,49 @@
                 return;
             }
 
+            // Filter by selected building if a building is selected
+            const deviceSelect = document.getElementById('deviceSelect');
+            const selectedValue = deviceSelect ? deviceSelect.value : '';
+            const grouped = groupDevicesByLocation();
+            let targetBuilding = null;
+            
+            if (selectedValue && selectedValue !== '') {
+                // Check if selectedValue is a building name
+                if (grouped[selectedValue]) {
+                    targetBuilding = selectedValue;
+                    addDebugLog(`Filtering device list to show only building: ${targetBuilding}`);
+                } else {
+                    // Check if selectedValue is a device address, find its building
+                    for (const [building, phases] of Object.entries(grouped)) {
+                        for (const phase of ['R', 'S', 'T']) {
+                            if (phases[phase] && phases[phase].deviceAddress === selectedValue) {
+                                targetBuilding = building;
+                                addDebugLog(`Filtering device list to show building of device ${selectedValue}: ${targetBuilding}`);
+                                break;
+                            }
+                        }
+                        if (targetBuilding) break;
+                    }
+                }
+            }
+
             container.innerHTML = '';
             
+            // Get device addresses for target building if filtering
+            const targetDeviceAddresses = new Set();
+            if (targetBuilding && grouped[targetBuilding]) {
+                ['R', 'S', 'T'].forEach(phase => {
+                    if (grouped[targetBuilding][phase] && grouped[targetBuilding][phase].deviceAddress) {
+                        targetDeviceAddresses.add(grouped[targetBuilding][phase].deviceAddress);
+                    }
+                });
+            }
+            
             Object.entries(latestData).forEach(([deviceAddress, data]) => {
+                // Filter by building if building is selected
+                if (targetBuilding && !targetDeviceAddresses.has(deviceAddress)) {
+                    return; // Skip devices not in selected building
+                }
                 if (!data || typeof data !== 'object') {
                     addDebugLog(`Skipping invalid data for device ${deviceAddress}`);
                     return;
@@ -2912,11 +2979,59 @@
 
         // Event handlers
         function onDeviceChange() {
-            currentDevice = document.getElementById('deviceSelect').value;
-            addDebugLog(`Building changed to: ${currentDevice || 'All Buildings'}`);
-            updateComparisonCharts(); // Update comparison charts when building changes
-            updateDetailChart();
+            const deviceSelect = document.getElementById('deviceSelect');
+            const selectedValue = deviceSelect ? deviceSelect.value : '';
+            currentDevice = selectedValue;
+            
+            addDebugLog(`Building/Device changed to: ${selectedValue || 'All Buildings'}`);
+            
+            // Check if selected value is a building name or device address
+            const grouped = groupDevicesByLocation();
+            let isBuilding = false;
+            let isDeviceAddress = false;
+            
+            if (selectedValue && selectedValue !== '') {
+                // Check if it's a building name
+                if (grouped[selectedValue]) {
+                    isBuilding = true;
+                    addDebugLog(`Selected value "${selectedValue}" is a building name`);
+                } else {
+                    // Check if it's a device address
+                    for (const [building, phases] of Object.entries(grouped)) {
+                        for (const phase of ['R', 'S', 'T']) {
+                            if (phases[phase] && phases[phase].deviceAddress === selectedValue) {
+                                isDeviceAddress = true;
+                                addDebugLog(`Selected value "${selectedValue}" is a device address (${building}/${phase})`);
+                                break;
+                            }
+                        }
+                        if (isDeviceAddress) break;
+                    }
+                }
+            }
+            
+            // Update comparison charts (always show selected building's phases)
+            updateComparisonCharts();
+            
+            // Update detail chart only if a device address is selected (not building)
+            if (isDeviceAddress && selectedValue) {
+                addDebugLog(`Updating detail chart for device: ${selectedValue}`);
+                updateDetailChart();
+            } else {
+                // Clear detail chart if building is selected or nothing selected
+                addDebugLog(`Clearing detail chart (building selected or none)`);
+                detailChart.data.labels = [];
+                detailChart.data.datasets[0].data = [];
+                detailChart.data.datasets[1].data = [];
+                detailChart.data.datasets[2].data = [];
+                detailChart.update('none');
+            }
+            
+            // Update device list (filtered by building if building selected)
             updateDeviceList();
+            
+            // Update location panels (filtered by building if building selected)
+            updateAllLocations();
         }
 
         function onPeriodChange() {
