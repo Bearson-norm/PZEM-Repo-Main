@@ -59,11 +59,23 @@ class DatabaseManager:
     def __init__(self):
         self.connection = None
         self.jakarta_tz = pytz.timezone('Asia/Jakarta')
+        
+        # Enhanced connection pool with timeout settings
         self.pool = SimpleConnectionPool(
             minconn=1,
             maxconn=10,
             **DB_CONFIG
         )
+        
+        # Set connection timeout for pool connections
+        try:
+            # Configure connection timeout at pool level
+            import psycopg2.pool
+            # Note: SimpleConnectionPool doesn't support timeout directly,
+            # but we'll handle it in get_connection()
+        except:
+            pass
+        
         self.connect()
         
         # Optimization: Simple in-memory cache with TTL
@@ -74,6 +86,10 @@ class DatabaseManager:
             'three_phase_summary': 15,  # 15 seconds
             'all_latest': 5  # 5 seconds (most frequently updated)
         }
+        
+        # Connection health tracking
+        self.last_health_check = datetime.now()
+        self.health_check_interval = 300  # 5 minutes
     
     def _get_cache_key(self, key, *args):
         """Generate cache key"""
@@ -124,13 +140,35 @@ class DatabaseManager:
 
     def connect(self):
         try:
-            self.connection = psycopg2.connect(**DB_CONFIG)
-            logger.info("[SUCCESS] Connected to PostgreSQL database")
+            # Add connection timeout and keepalive settings
+            conn_params = DB_CONFIG.copy()
+            conn_params['connect_timeout'] = 10  # 10 seconds connection timeout
+            conn_params['keepalives'] = 1
+            conn_params['keepalives_idle'] = 30
+            conn_params['keepalives_interval'] = 10
+            conn_params['keepalives_count'] = 3
+            
+            self.connection = psycopg2.connect(**conn_params)
+            
+            # Set statement timeout to prevent long-running queries
+            cursor = self.connection.cursor()
+            cursor.execute("SET statement_timeout = '30s'")
+            cursor.close()
+            self.connection.commit()
+            
+            logger.info("[SUCCESS] Connected to PostgreSQL database with timeout settings")
         except Exception as e:
             logger.error(f"[ERROR] Database connection error: {e}")
+            self.connection = None
     
     def get_connection(self):
-        """Get database connection with error recovery"""
+        """Get database connection with error recovery and health checks"""
+        # Periodic health check
+        now = datetime.now()
+        if (now - self.last_health_check).total_seconds() > self.health_check_interval:
+            self._perform_health_check()
+            self.last_health_check = now
+        
         if self.connection is None or self.connection.closed:
             self.connect()
         else:
@@ -160,7 +198,37 @@ class DatabaseManager:
                     except:
                         pass
                     self.connect()
+            except Exception as e:
+                # Any other error, reconnect
+                logger.warning(f"Unexpected connection error, reconnecting: {e}")
+                try:
+                    self.connection.close()
+                except:
+                    pass
+                self.connect()
         return self.connection
+    
+    def _perform_health_check(self):
+        """Perform periodic health check on database connection"""
+        try:
+            conn = self.pool.getconn()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1")
+                cursor.close()
+                conn.commit()
+                logger.debug("Database health check passed")
+            finally:
+                self.pool.putconn(conn)
+        except Exception as e:
+            logger.warning(f"Database health check failed: {e}")
+            # Try to reconnect main connection
+            try:
+                if self.connection:
+                    self.connection.close()
+            except:
+                pass
+            self.connect()
     
     def serialize_data(self, data):
         """Convert datetime objects and Decimals to JSON serializable formats"""
@@ -937,19 +1005,32 @@ def handle_chart_update_request(data):
             'data': []
         })
 
-# Enhanced background task dengan 3-phase calculations
+# Enhanced background task dengan 3-phase calculations and error recovery
 def background_thread():
-    """Background task dengan debugging yang lebih baik"""
+    """Background task dengan debugging yang lebih baik dan error recovery"""
     logger.info("[BACKGROUND] Starting enhanced background data push thread (Jakarta timezone)")
+    
+    consecutive_errors = 0
+    max_consecutive_errors = 5
     
     while True:
         try:
             jakarta_now = datetime.now(JAKARTA_TZ)
             logger.debug(f"[BACKGROUND] Fetching data at {jakarta_now.strftime('%Y-%m-%d %H:%M:%S')} WIB")
             
+            # Perform periodic health check
+            if hasattr(db_manager, '_perform_health_check'):
+                try:
+                    db_manager._perform_health_check()
+                except Exception as health_error:
+                    logger.warning(f"[BACKGROUND] Health check warning: {health_error}")
+            
             # Ambil data terbaru dengan timestamp yang sudah diperbaiki
             latest_data = db_manager.get_all_latest_data()
             three_phase_summary = db_manager.get_three_phase_summary() if hasattr(db_manager, 'get_three_phase_summary') else {}
+            
+            # Reset error counter on success
+            consecutive_errors = 0
             
             if latest_data or three_phase_summary:
                 combined_data = {
@@ -980,6 +1061,16 @@ def background_thread():
                         'timestamp': jakarta_now.isoformat(),
                         'error': 'serialization_failed'
                     })
+                    consecutive_errors += 1
+                    if consecutive_errors >= max_consecutive_errors:
+                        logger.error(f"[ERROR] Too many consecutive errors ({consecutive_errors}), attempting recovery...")
+                        # Try to reconnect database
+                        try:
+                            db_manager.connect()
+                        except:
+                            pass
+                        consecutive_errors = 0
+                    time.sleep(30)
                     continue
                 
                 # Emit data yang sudah diperbaiki
@@ -995,8 +1086,32 @@ def background_thread():
                     'timezone': 'Asia/Jakarta'
                 })
             
+        except psycopg2.OperationalError as db_error:
+            consecutive_errors += 1
+            logger.error(f"[ERROR] Database operational error in background thread: {db_error}")
+            logger.error(f"[ERROR] Consecutive errors: {consecutive_errors}/{max_consecutive_errors}")
+            
+            # Try to reconnect database
+            try:
+                logger.info("[BACKGROUND] Attempting database reconnection...")
+                db_manager.connect()
+            except Exception as reconnect_error:
+                logger.error(f"[ERROR] Database reconnection failed: {reconnect_error}")
+            
+            if consecutive_errors >= max_consecutive_errors:
+                logger.error(f"[ERROR] Too many consecutive database errors ({consecutive_errors}), waiting longer before retry...")
+                time.sleep(60)  # Wait 1 minute before retry
+                consecutive_errors = 0
+            else:
+                time.sleep(30)
+                
         except Exception as e:
+            consecutive_errors += 1
             logger.error(f"[ERROR] Error in background thread: {e}")
+            logger.error(f"[ERROR] Error type: {type(e).__name__}")
+            import traceback
+            logger.error(f"[ERROR] Traceback: {traceback.format_exc()}")
+            
             try:
                 error_time = datetime.now(JAKARTA_TZ)
                 socketio.emit('data_update', {
@@ -1008,8 +1123,17 @@ def background_thread():
                 })
             except Exception as emit_error:
                 logger.error(f"[ERROR] Failed to emit error recovery data: {emit_error}")
+            
+            if consecutive_errors >= max_consecutive_errors:
+                logger.error(f"[ERROR] Too many consecutive errors ({consecutive_errors}), waiting longer...")
+                time.sleep(60)
+                consecutive_errors = 0
+            else:
+                time.sleep(30)
         
-        time.sleep(30)  # Update setiap 30 detik
+        # Normal sleep interval
+        if consecutive_errors == 0:
+            time.sleep(30)  # Update setiap 30 detik
 
 # Error handlers
 @app.errorhandler(404)

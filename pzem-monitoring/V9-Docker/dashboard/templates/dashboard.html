@@ -1004,7 +1004,10 @@
         let currentChart = null;
         let powerChart = null;
         let socket = null;
+        // currentDevice is reserved for *device address* selection (detail chart).
+        // Building selection is tracked separately in currentBuilding.
         let currentDevice = '';
+        let currentBuilding = ''; // '' means All Buildings
         let currentPeriod = 'hour';
         let devices = [];
         let latestData = {};
@@ -1854,19 +1857,55 @@
             updateAllLocations();
         }
 
-        // Initialize Socket.IO connection
+        // Socket.IO reconnection variables
+        let socketReconnectAttempts = 0;
+        let socketReconnectDelay = 1000; // Start with 1 second
+        const maxReconnectDelay = 30000; // Max 30 seconds
+        let socketReconnectTimer = null;
+        let lastSuccessfulDataTime = null;
+        let dataUpdateCheckInterval = null;
+
+        // Initialize Socket.IO connection with automatic reconnection
         function initializeSocketIO() {
-            socket = io();
+            // Clear any existing reconnect timer
+            if (socketReconnectTimer) {
+                clearTimeout(socketReconnectTimer);
+                socketReconnectTimer = null;
+            }
+            
+            // Disconnect existing socket if any
+            if (socket && socket.connected) {
+                socket.disconnect();
+            }
+            
+            socket = io({
+                reconnection: true,
+                reconnectionDelay: 1000,
+                reconnectionDelayMax: 5000,
+                reconnectionAttempts: Infinity,
+                timeout: 20000,
+                forceNew: true
+            });
             
             socket.on('connect', function() {
                 console.log('Connected to server');
-                addDebugLog('Socket.IO connected');
+                addDebugLog('✅ Socket.IO connected');
+                socketReconnectAttempts = 0;
+                socketReconnectDelay = 1000; // Reset delay
                 updateLastUpdate();
+                
+                // Start periodic data update check
+                startDataUpdateCheck();
             });
             
             socket.on('data_update', function(data) {
                 console.log('Received data_update:', data);
-                addDebugLog('Data update received');
+                addDebugLog('📊 Data update received');
+                
+                // Reset reconnect attempts on successful data
+                socketReconnectAttempts = 0;
+                socketReconnectDelay = 1000;
+                lastSuccessfulDataTime = Date.now();
                 
                 // Track actual data update time
                 if (data.timestamp || data.server_time) {
@@ -1910,10 +1949,93 @@
                 updateLastUpdate();
             });
             
-            socket.on('disconnect', function() {
-                console.log('Disconnected from server');
-                addDebugLog('Socket.IO disconnected');
+            socket.on('disconnect', function(reason) {
+                console.log('Disconnected from server:', reason);
+                addDebugLog(`⚠️ Socket.IO disconnected: ${reason}`);
+                
+                // If not a manual disconnect, attempt reconnection
+                if (reason !== 'io client disconnect') {
+                    scheduleReconnect();
+                }
             });
+            
+            socket.on('connect_error', function(error) {
+                console.error('Socket.IO connection error:', error);
+                addDebugLog(`❌ Socket.IO connection error: ${error.message}`);
+                scheduleReconnect();
+            });
+            
+            socket.on('reconnect', function(attemptNumber) {
+                console.log('Reconnected after', attemptNumber, 'attempts');
+                addDebugLog(`✅ Socket.IO reconnected after ${attemptNumber} attempts`);
+                socketReconnectAttempts = 0;
+                socketReconnectDelay = 1000;
+            });
+            
+            socket.on('reconnect_attempt', function(attemptNumber) {
+                console.log('Reconnection attempt', attemptNumber);
+                addDebugLog(`🔄 Socket.IO reconnection attempt ${attemptNumber}...`);
+            });
+            
+            socket.on('reconnect_failed', function() {
+                console.error('Socket.IO reconnection failed');
+                addDebugLog('❌ Socket.IO reconnection failed - will retry');
+                scheduleReconnect();
+            });
+        }
+        
+        // Schedule reconnection with exponential backoff
+        function scheduleReconnect() {
+            if (socketReconnectTimer) {
+                return; // Already scheduled
+            }
+            
+            socketReconnectAttempts++;
+            const delay = Math.min(socketReconnectDelay * Math.pow(2, socketReconnectAttempts - 1), maxReconnectDelay);
+            
+            addDebugLog(`🔄 Scheduling reconnection in ${delay/1000}s (attempt ${socketReconnectAttempts})`);
+            
+            socketReconnectTimer = setTimeout(function() {
+                socketReconnectTimer = null;
+                if (!socket || !socket.connected) {
+                    addDebugLog('🔄 Attempting to reconnect Socket.IO...');
+                    initializeSocketIO();
+                }
+            }, delay);
+        }
+        
+        // Periodic check for data updates - if no data for 2 minutes, try to reload
+        function startDataUpdateCheck() {
+            if (dataUpdateCheckInterval) {
+                clearInterval(dataUpdateCheckInterval);
+            }
+            
+            dataUpdateCheckInterval = setInterval(function() {
+                const now = Date.now();
+                const timeSinceLastData = lastSuccessfulDataTime ? (now - lastSuccessfulDataTime) : Infinity;
+                
+                // If no data for 2 minutes, try to reload via API
+                if (timeSinceLastData > 120000) { // 2 minutes
+                    addDebugLog('⚠️ No data updates for 2+ minutes, attempting API fallback...');
+                    
+                    // Try to reload data via REST API
+                    loadLatestData().then(function() {
+                        if (Object.keys(latestData).length > 0) {
+                            addDebugLog('✅ API fallback successful, updating display...');
+                            updateSystemStatus();
+                            updateDeviceList();
+                            updateDataTable();
+                            updateComparisonCharts();
+                            updateAllLocations();
+                            lastSuccessfulDataTime = now;
+                        } else {
+                            addDebugLog('⚠️ API fallback returned no data');
+                        }
+                    }).catch(function(error) {
+                        addDebugLog(`❌ API fallback failed: ${error.message}`);
+                    });
+                }
+            }, 30000); // Check every 30 seconds
         }
 
         // Initialize all charts
@@ -2187,6 +2309,8 @@
                 }
                 
                 const deviceSelect = document.getElementById('deviceSelect');
+                // Preserve current building selection across refreshes/reloads
+                const previousSelection = currentBuilding || (deviceSelect ? deviceSelect.value : '');
                 deviceSelect.innerHTML = '<option value="">All Buildings</option>';
                 
                 if (Array.isArray(devicesData)) {
@@ -2268,6 +2392,14 @@
                 } else {
                     addDebugLog('Invalid devices data format');
                     deviceSelect.innerHTML = '<option value="">No buildings found</option>';
+                }
+
+                // Restore selection if it still exists
+                if (deviceSelect) {
+                    const canRestore = previousSelection && Array.from(deviceSelect.options).some(o => o.value === previousSelection);
+                    deviceSelect.value = canRestore ? previousSelection : '';
+                    currentBuilding = deviceSelect.value || '';
+                    addDebugLog(`Restored building selection: ${currentBuilding || 'All Buildings'}`);
                 }
 
                 await loadLatestData();
@@ -2590,51 +2722,19 @@
                 return allData;
             }
             
-            // Determine target building from currentDevice or deviceSelect
+            // Determine target building from building selector (currentBuilding / deviceSelect)
             let targetBuilding = '';
             
-            // Check if currentDevice is a building name (from deviceSelect)
             const deviceSelect = document.getElementById('deviceSelect');
             const selectedValue = deviceSelect ? deviceSelect.value : '';
             
-            if (selectedValue && selectedValue !== '') {
-                // Check if selectedValue is a building name (exists in grouped)
-                if (grouped[selectedValue]) {
-                    targetBuilding = selectedValue;
-                    addDebugLog(`Using selected building from deviceSelect: ${targetBuilding}`);
-                } else {
-                    // selectedValue might be a device address, find its building
-                    for (const [building, phases] of Object.entries(grouped)) {
-                        for (const phase of ['R', 'S', 'T']) {
-                            if (phases[phase] && phases[phase].deviceAddress === selectedValue) {
-                                targetBuilding = building;
-                                addDebugLog(`Found building for device ${selectedValue}: ${targetBuilding}`);
-                                break;
-                            }
-                        }
-                        if (targetBuilding) break;
-                    }
-                }
-            }
-            
-            // If still no building found, use currentDevice as building name
-            if (!targetBuilding && currentDevice && currentDevice !== '') {
-                if (grouped[currentDevice]) {
-                    targetBuilding = currentDevice;
-                    addDebugLog(`Using currentDevice as building: ${targetBuilding}`);
-                } else {
-                    // currentDevice might be a device address, find its building
-                    for (const [building, phases] of Object.entries(grouped)) {
-                        for (const phase of ['R', 'S', 'T']) {
-                            if (phases[phase] && phases[phase].deviceAddress === currentDevice) {
-                                targetBuilding = building;
-                                addDebugLog(`Found building for currentDevice ${currentDevice}: ${targetBuilding}`);
-                                break;
-                            }
-                        }
-                        if (targetBuilding) break;
-                    }
-                }
+            // Prefer the persisted building state
+            if (currentBuilding && grouped[currentBuilding]) {
+                targetBuilding = currentBuilding;
+                addDebugLog(`Using currentBuilding: ${targetBuilding}`);
+            } else if (selectedValue && grouped[selectedValue]) {
+                targetBuilding = selectedValue;
+                addDebugLog(`Using selected building from deviceSelect: ${targetBuilding}`);
             }
             
             // If no building selected, show first building's phases
@@ -2817,10 +2917,36 @@
         // Select device
         function selectDevice(deviceAddress) {
             currentDevice = deviceAddress;
-            document.getElementById('deviceSelect').value = deviceAddress;
             addDebugLog(`Selected device: ${deviceAddress}`);
-            updateDetailChart();
+
+            // If device belongs to a building, select that building in dropdown
+            try {
+                const grouped = groupDevicesByLocation();
+                let deviceBuilding = '';
+                for (const [building, phases] of Object.entries(grouped)) {
+                    for (const phase of ['R', 'S', 'T']) {
+                        if (phases[phase] && phases[phase].deviceAddress === deviceAddress) {
+                            deviceBuilding = building;
+                            break;
+                        }
+                    }
+                    if (deviceBuilding) break;
+                }
+
+                if (deviceBuilding) {
+                    currentBuilding = deviceBuilding;
+                    const deviceSelect = document.getElementById('deviceSelect');
+                    if (deviceSelect) deviceSelect.value = deviceBuilding;
+                    addDebugLog(`Auto-selected building for device ${deviceAddress}: ${deviceBuilding}`);
+                }
+            } catch (e) {
+                addDebugLog(`Could not determine building for device ${deviceAddress}: ${e.message}`);
+            }
+
+            updateComparisonCharts();
+            updateAllLocations();
             updateDeviceList();
+            updateDetailChart();
         }
 
         // Update detail chart for selected device
@@ -2981,57 +3107,25 @@
         function onDeviceChange() {
             const deviceSelect = document.getElementById('deviceSelect');
             const selectedValue = deviceSelect ? deviceSelect.value : '';
-            currentDevice = selectedValue;
-            
-            addDebugLog(`Building/Device changed to: ${selectedValue || 'All Buildings'}`);
-            
-            // Check if selected value is a building name or device address
-            const grouped = groupDevicesByLocation();
-            let isBuilding = false;
-            let isDeviceAddress = false;
-            
-            if (selectedValue && selectedValue !== '') {
-                // Check if it's a building name
-                if (grouped[selectedValue]) {
-                    isBuilding = true;
-                    addDebugLog(`Selected value "${selectedValue}" is a building name`);
-                } else {
-                    // Check if it's a device address
-                    for (const [building, phases] of Object.entries(grouped)) {
-                        for (const phase of ['R', 'S', 'T']) {
-                            if (phases[phase] && phases[phase].deviceAddress === selectedValue) {
-                                isDeviceAddress = true;
-                                addDebugLog(`Selected value "${selectedValue}" is a device address (${building}/${phase})`);
-                                break;
-                            }
-                        }
-                        if (isDeviceAddress) break;
-                    }
-                }
-            }
-            
-            // Update comparison charts (always show selected building's phases)
+
+            // Dropdown is a *building selector*, never a device selector
+            currentBuilding = selectedValue || '';
+            currentDevice = ''; // clear detail device on building change
+            addDebugLog(`Building changed to: ${currentBuilding || 'All Buildings'}`);
+
+            // Update building-scoped UI
             updateComparisonCharts();
-            
-            // Update detail chart only if a device address is selected (not building)
-            if (isDeviceAddress && selectedValue) {
-                addDebugLog(`Updating detail chart for device: ${selectedValue}`);
-                updateDetailChart();
-            } else {
-                // Clear detail chart if building is selected or nothing selected
-                addDebugLog(`Clearing detail chart (building selected or none)`);
+            updateAllLocations();
+            updateDeviceList();
+
+            // Clear detail chart because no device is selected
+            if (detailChart) {
                 detailChart.data.labels = [];
                 detailChart.data.datasets[0].data = [];
                 detailChart.data.datasets[1].data = [];
                 detailChart.data.datasets[2].data = [];
                 detailChart.update('none');
             }
-            
-            // Update device list (filtered by building if building selected)
-            updateDeviceList();
-            
-            // Update location panels (filtered by building if building selected)
-            updateAllLocations();
         }
 
         function onPeriodChange() {
