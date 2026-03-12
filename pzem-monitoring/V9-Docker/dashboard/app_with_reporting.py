@@ -18,7 +18,7 @@ import logging
 from decimal import Decimal
 import os
 from contextlib import contextmanager
-from psycopg2.pool import SimpleConnectionPool
+from psycopg2.pool import ThreadedConnectionPool
 import pytz
 import re
 
@@ -66,9 +66,9 @@ class DatabaseManager:
         self.connection = None
         self.jakarta_tz = pytz.timezone('Asia/Jakarta')
         
-        # Enhanced connection pool with timeout settings
-        self.pool = SimpleConnectionPool(
-            minconn=1,
+        # ThreadedConnectionPool: safe for eventlet greenlets + background thread
+        self.pool = ThreadedConnectionPool(
+            minconn=2,
             maxconn=10,
             **DB_CONFIG
         )
@@ -1009,12 +1009,7 @@ def background_thread():
             jakarta_now = datetime.now(JAKARTA_TZ)
             logger.debug(f"[BACKGROUND] Fetching data at {jakarta_now.strftime('%Y-%m-%d %H:%M:%S')} WIB")
             
-            # Perform periodic health check
-            if hasattr(db_manager, '_perform_health_check'):
-                try:
-                    db_manager._perform_health_check()
-                except Exception as health_error:
-                    logger.warning(f"[BACKGROUND] Health check warning: {health_error}")
+            # Skip health check - reduces contention; pool handles connections
             
             # Ambil data terbaru dengan timestamp yang sudah diperbaiki
             latest_data = db_manager.get_all_latest_data()

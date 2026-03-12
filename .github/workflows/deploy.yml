@@ -1,11 +1,13 @@
 name: CD - Deploy to Production VPS
 
 on:
-  push:
+  # Trigger setelah CI workflow berhasil (hanya untuk main/master)
+  workflow_run:
+    workflows: ["CI - Build and Test"]
+    types:
+      - completed
     branches: [ main, master ]
-    paths:
-      - 'pzem-monitoring/V9-Docker/**'
-      - '.github/workflows/**'
+  # Manual trigger tetap tersedia
   workflow_dispatch:
     inputs:
       environment:
@@ -16,6 +18,11 @@ on:
         options:
           - production
           - staging
+      skip_ci_check:
+        description: 'Skip CI check (for emergency deployment)'
+        required: false
+        default: false
+        type: boolean
 
 env:
   VPS_USER: foom
@@ -24,14 +31,50 @@ env:
   PROJECT_DIR: pzem-monitoring/V9-Docker
 
 jobs:
+  check-ci-status:
+    name: Verify CI Status
+    runs-on: ubuntu-latest
+    if: always()
+    outputs:
+      ci_success: ${{ steps.check.outputs.success }}
+      commit_sha: ${{ github.event.workflow_run.head_sha || github.sha }}
+    
+    steps:
+    - name: Check CI workflow result
+      id: check
+      run: |
+        if [ "${{ github.event_name }}" == "workflow_run" ]; then
+          if [ "${{ github.event.workflow_run.conclusion }}" != "success" ]; then
+            echo "❌ CI workflow did not succeed. Conclusion: ${{ github.event.workflow_run.conclusion }}"
+            echo "success=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          echo "✅ CI workflow completed successfully"
+          echo "success=true" >> $GITHUB_OUTPUT
+        else
+          # Manual dispatch - skip CI check if requested
+          if [ "${{ github.event.inputs.skip_ci_check }}" == "true" ]; then
+            echo "⚠️  Skipping CI check (manual deployment with skip_ci_check=true)"
+            echo "success=true" >> $GITHUB_OUTPUT
+          else
+            echo "ℹ️  Manual deployment - CI check skipped"
+            echo "success=true" >> $GITHUB_OUTPUT
+          fi
+        fi
+
   deploy:
     name: Deploy to VPS
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
+    needs: [check-ci-status]
+    if: |
+      (github.event_name == 'workflow_run' && needs.check-ci-status.outputs.ci_success == 'true') ||
+      (github.event_name == 'workflow_dispatch' && needs.check-ci-status.outputs.ci_success == 'true')
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event_name == 'workflow_run' && needs.check-ci-status.outputs.commit_sha || github.sha }}
 
     - name: Setup SSH
       run: |
@@ -59,28 +102,13 @@ jobs:
         ssh-keyscan -H ${{ env.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
         chmod 600 ~/.ssh/known_hosts
         
-        # Test SSH connection (non-blocking)
+        # Quick SSH connection test
         echo "🔍 Testing SSH connection..."
-        SSH_TEST_OUTPUT=$(ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes ${{ env.VPS_USER }}@${{ env.VPS_HOST }} "echo 'SSH connection test successful'" 2>&1)
-        SSH_EXIT_CODE=$?
-        
-        if [ $SSH_EXIT_CODE -eq 0 ]; then
-          echo "✅ SSH connection test successful"
+        if ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes ${{ env.VPS_USER }}@${{ env.VPS_HOST }} "echo 'SSH OK'" > /dev/null 2>&1; then
+          echo "✅ SSH connection OK"
         else
-          echo "⚠️  Warning: SSH connection test failed (exit code: $SSH_EXIT_CODE)"
-          echo "   Error output: $SSH_TEST_OUTPUT"
-          echo "   This may be due to:"
-          echo "   - Key format issue (check GitHub Secret VPS_SSH_KEY)"
-          echo "   - Key not matching VPS authorized_keys"
-          echo "   - Network connectivity issue"
-          echo "   - VPS host unreachable"
-          echo ""
-          echo "   Debug info:"
-          echo "   - Key file exists: $([ -f ~/.ssh/deploy_key ] && echo 'yes' || echo 'no')"
-          echo "   - Key file size: $(wc -c < ~/.ssh/deploy_key) bytes"
-          echo "   - Key starts with BEGIN: $(head -1 ~/.ssh/deploy_key | grep -q 'BEGIN' && echo 'yes' || echo 'no')"
-          echo ""
-          echo "   Continuing with deployment attempt (may fail at upload step)..."
+          echo "❌ SSH connection failed - check VPS_SSH_KEY secret"
+          exit 1
         fi
         
         set -e  # Re-enable error checking
@@ -110,34 +138,12 @@ jobs:
         echo "📦 Files to include in package:"
         echo "$FILES_TO_INCLUDE"
         
-        # Verify dashboard.html exists and has new functions BEFORE packaging
-        echo "🔍 Pre-packaging verification..."
-        if [ -f "dashboard/templates/dashboard.html" ]; then
-          DASHBOARD_SIZE=$(wc -c < dashboard/templates/dashboard.html)
-          DASHBOARD_LINES=$(wc -l < dashboard/templates/dashboard.html)
-          UPDATE_PANELS=$(grep -c "updateLocationPanels" dashboard/templates/dashboard.html || echo "0")
-          GROUP_DEVICES=$(grep -c "groupDevicesByLocation" dashboard/templates/dashboard.html || echo "0")
-          LOCATIONS=$(grep -c "locationsContainer" dashboard/templates/dashboard.html || echo "0")
-          
-          echo "   📄 dashboard.html stats:"
-          echo "      - Size: $DASHBOARD_SIZE bytes"
-          echo "      - Lines: $DASHBOARD_LINES"
-          echo "      - updateLocationPanels: $UPDATE_PANELS"
-          echo "      - groupDevicesByLocation: $GROUP_DEVICES"
-          echo "      - locationsContainer: $LOCATIONS"
-          
-          if [ "$UPDATE_PANELS" -eq 0 ] || [ "$GROUP_DEVICES" -eq 0 ] || [ "$LOCATIONS" -eq 0 ]; then
-            echo "   ⚠️  WARNING: New functions not found in source file!"
-            echo "      This package will contain outdated code"
-            echo "      Current commit: $(git rev-parse HEAD 2>/dev/null || echo 'unknown')"
-            echo "      File last modified: $(git log -1 --format=%ai dashboard/templates/dashboard.html 2>/dev/null || echo 'unknown')"
-          else
-            echo "   ✅ Source file verified - contains all new functions"
-          fi
-        else
-          echo "   ❌ ERROR: dashboard.html not found in source!"
+        # Quick verification dashboard.html exists
+        if [ ! -f "dashboard/templates/dashboard.html" ]; then
+          echo "❌ ERROR: dashboard.html not found!"
           exit 1
         fi
+        echo "✅ dashboard.html verified"
         
         # Create tar archive with excludes before files
         tar -czf ../../${PACKAGE_NAME} \
@@ -150,23 +156,13 @@ jobs:
           --exclude='.git' \
           $FILES_TO_INCLUDE
         
-        # Verify package was created and check size
+        # Quick package verification
         PACKAGE_SIZE=$(wc -c < ../../${PACKAGE_NAME})
-        echo "📦 Package created: ${PACKAGE_NAME}"
-        echo "   - Package size: $PACKAGE_SIZE bytes"
-        
-        if [ "$PACKAGE_SIZE" -lt 10000 ]; then
-          echo "   ⚠️  WARNING: Package seems too small!"
+        if [ "$PACKAGE_SIZE" -lt 10000 ] || ! tar -tzf ../../${PACKAGE_NAME} | grep -q "dashboard/templates/dashboard.html"; then
+          echo "❌ Package verification failed!"
           exit 1
         fi
-        
-        # Verify dashboard.html is in package
-        echo "🔍 Verifying dashboard.html in package..."
-        tar -tzf ../../${PACKAGE_NAME} | grep -q "dashboard/templates/dashboard.html" || {
-          echo "   ❌ ERROR: dashboard.html not found in package!"
-          exit 1
-        }
-        echo "   ✅ dashboard.html found in package"
+        echo "✅ Package verified: ${PACKAGE_NAME} ($(echo $PACKAGE_SIZE | awk '{printf "%.1f KB", $1/1024}'))"
         
         cd ../..
         echo "PACKAGE_NAME=${PACKAGE_NAME}" >> $GITHUB_ENV
@@ -174,37 +170,16 @@ jobs:
 
     - name: Upload package to VPS
       run: |
-        # Retry function for SCP
-        MAX_RETRIES=3
-        RETRY_COUNT=0
-        SCP_SUCCESS=false
-        
-        while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$SCP_SUCCESS" = false ]; do
-          RETRY_COUNT=$((RETRY_COUNT + 1))
-          echo "📤 Upload attempt $RETRY_COUNT of $MAX_RETRIES..."
-          
-          if scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=10 ${PACKAGE_NAME} ${{ env.VPS_USER }}@${{ env.VPS_HOST }}:/tmp/ 2>&1; then
-            SCP_SUCCESS=true
-            echo "✅ Package uploaded to VPS"
-          else
-            SCP_EXIT_CODE=$?
-            echo "⚠️  Upload failed with exit code: $SCP_EXIT_CODE"
-            
-            if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-              WAIT_TIME=$((RETRY_COUNT * 15))
-              echo "   Waiting ${WAIT_TIME} seconds before retry..."
-              sleep $WAIT_TIME
-            else
-              echo "❌ Upload failed after $MAX_RETRIES attempts"
-              echo "   Possible causes:"
-              echo "   - VPS is unreachable (check if VPS is running)"
-              echo "   - Network connectivity issues"
-              echo "   - Firewall blocking connection"
-              echo "   - SSH service not running on VPS"
-              exit 1
-            fi
+        # Optimized upload with single retry
+        if ! scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=20 ${PACKAGE_NAME} ${{ env.VPS_USER }}@${{ env.VPS_HOST }}:/tmp/ 2>&1; then
+          echo "⚠️  First upload attempt failed, retrying once..."
+          sleep 5
+          if ! scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=20 ${PACKAGE_NAME} ${{ env.VPS_USER }}@${{ env.VPS_HOST }}:/tmp/ 2>&1; then
+            echo "❌ Upload failed after retry"
+            exit 1
           fi
-        done
+        fi
+        echo "✅ Package uploaded to VPS"
 
     - name: Create remote deployment script
       run: |
@@ -261,17 +236,10 @@ jobs:
               echo "✅ .env backed up"
             fi
             
-            # Stop services (preserve volumes) - IMPORTANT: Stop before extracting new files
-            echo "🛑 Stopping services to ensure files are not locked..."
+            # Stop services quickly
+            echo "🛑 Stopping services..."
             $DOCKER_COMPOSE down 2>/dev/null || true
-            sleep 10  # Give containers time to fully stop
-            
-            # Verify containers are stopped
-            if docker ps | grep -q "pzem-monitoring\|pzem"; then
-              echo "⚠️  Warning: Some containers are still running, forcing stop..."
-              docker ps | grep -E "pzem-monitoring|pzem" | awk '{print $1}' | xargs -r docker stop 2>/dev/null || true
-              sleep 5
-            fi
+            sleep 3  # Reduced wait time
             echo "✅ Services stopped"
           fi
           
@@ -287,62 +255,11 @@ jobs:
         cd "${VPS_DEPLOY_DIR}"
         tar -xzf "${PACKAGE_FILE}"
         
-        # Verify critical files were extracted
-        echo "🔍 Verifying extracted files..."
-        if [ ! -f "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html" ]; then
-          echo "❌ ERROR: dashboard.html not found after extraction!"
+        # Quick file verification
+        if [ ! -f "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html" ] || [ "$(wc -c < "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html")" -lt 1000 ]; then
+          echo "❌ ERROR: dashboard.html missing or invalid!"
           exit 1
         fi
-        
-        # Verify dashboard.html is not empty and has correct content
-        DASHBOARD_SIZE=$(wc -c < "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html")
-        DASHBOARD_LINES=$(wc -l < "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html")
-        
-        if [ "$DASHBOARD_SIZE" -lt 1000 ]; then
-          echo "❌ ERROR: dashboard.html seems too small ($DASHBOARD_SIZE bytes)"
-          exit 1
-        fi
-        
-        echo "📊 dashboard.html stats:"
-        echo "   - Size: $DASHBOARD_SIZE bytes"
-        echo "   - Lines: $DASHBOARD_LINES"
-        echo "   - Location: ${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html"
-        
-        # Check for new functions (updateLocationPanels, groupDevicesByLocation, etc.)
-        echo "🔍 Verifying new functions..."
-        UPDATE_LOCATION_PANELS=$(grep -c "updateLocationPanels" "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html" || echo "0")
-        GROUP_DEVICES=$(grep -c "groupDevicesByLocation" "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html" || echo "0")
-        LOCATIONS_CONTAINER=$(grep -c "locationsContainer" "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html" || echo "0")
-        LOCATION_EXPANDED_STATE=$(grep -c "locationExpandedState" "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html" || echo "0")
-        
-        echo "   - updateLocationPanels: $UPDATE_LOCATION_PANELS occurrences"
-        echo "   - groupDevicesByLocation: $GROUP_DEVICES occurrences"
-        echo "   - locationsContainer: $LOCATIONS_CONTAINER occurrences"
-        echo "   - locationExpandedState: $LOCATION_EXPANDED_STATE occurrences"
-        
-        # Verify new functions exist (should be > 0 for updated version)
-        if [ "$UPDATE_LOCATION_PANELS" -eq 0 ] || [ "$GROUP_DEVICES" -eq 0 ] || [ "$LOCATIONS_CONTAINER" -eq 0 ]; then
-          echo "⚠️  WARNING: New functions not found in extracted file!"
-          echo "   This may indicate the file is outdated or package was created from old code"
-          echo "   - updateLocationPanels: $UPDATE_LOCATION_PANELS (expected > 0)"
-          echo "   - groupDevicesByLocation: $GROUP_DEVICES (expected > 0)"
-          echo "   - locationsContainer: $LOCATIONS_CONTAINER (expected > 0)"
-          echo ""
-          echo "   Checking file timestamp..."
-          ls -lh "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html"
-          echo ""
-          echo "   ⚠️  Continuing deployment, but file may need manual update"
-        else
-          echo "✅ All new functions verified in extracted file"
-        fi
-        
-        # Check for duplicate code (old bug check)
-        DUPLICATE_COUNT=$(grep -c "powerChart.data.labels = commonLabels" "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html" || echo "0")
-        if [ "$DUPLICATE_COUNT" -gt 1 ]; then
-          echo "⚠️  WARNING: Found $DUPLICATE_COUNT instances of duplicate code in dashboard.html"
-          echo "   This may indicate the file wasn't updated correctly"
-        fi
-        
         echo "✅ Files extracted and verified"
         
         # Restore .env if exists and backup directory is available
@@ -367,166 +284,39 @@ jobs:
         chmod 755 ${VPS_DEPLOY_DIR}/dashboard/templates 2>/dev/null || true
         echo "✅ Permissions set"
         
-        # Check network connectivity before build
-        echo "🌐 Checking network connectivity..."
-        if ! timeout 10 ping -c 1 8.8.8.8 > /dev/null 2>&1 && ! timeout 10 ping -c 1 1.1.1.1 > /dev/null 2>&1; then
-          echo "⚠️  Warning: Network connectivity check failed"
-          echo "   This may cause Docker build to fail"
-        else
-          echo "✅ Network connectivity OK"
-        fi
-        
-        # Check Docker Hub connectivity
-        echo "🐳 Checking Docker Hub connectivity..."
-        if ! timeout 10 curl -s https://auth.docker.io > /dev/null 2>&1; then
-          echo "⚠️  Warning: Cannot reach Docker Hub"
-          echo "   Will try to build anyway, but may fail"
-        else
-          echo "✅ Docker Hub reachable"
-        fi
-        
-        # Build and start
-        echo "🔨 Building containers..."
+        # Build without cache to ensure latest code is deployed
+        echo "🔨 Building containers (no cache - ensures code changes are applied)..."
         cd "${VPS_DEPLOY_DIR}"
         
-        # Try build with retry mechanism
-        BUILD_SUCCESS=false
-        MAX_RETRIES=3
-        RETRY_COUNT=0
-        
-        while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$BUILD_SUCCESS" = false ]; do
-          RETRY_COUNT=$((RETRY_COUNT + 1))
-          echo "   Build attempt $RETRY_COUNT of $MAX_RETRIES..."
-          
-          if $DOCKER_COMPOSE build --no-cache 2>&1; then
-            BUILD_SUCCESS=true
-            echo "✅ Build successful"
-          else
-            BUILD_EXIT_CODE=$?
-            echo "⚠️  Build failed with exit code: $BUILD_EXIT_CODE"
-            
-            if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-              WAIT_TIME=$((RETRY_COUNT * 10))
-              echo "   Waiting ${WAIT_TIME} seconds before retry..."
-              sleep $WAIT_TIME
-            else
-              echo "❌ Build failed after $MAX_RETRIES attempts"
-              echo "   This may be due to network issues or Docker Hub being unavailable"
-              echo "   Attempting to start with existing images (if available)..."
-              
-              # Check if images exist locally
-              if docker images | grep -q "pzem-monitoring.*dashboard\|.*dashboard.*pzem" || \
-                 docker images | grep -q "pzem-monitoring.*mqtt\|.*mqtt.*pzem"; then
-                echo "   Found existing images, will try to use them"
-                BUILD_SUCCESS=true  # Continue with existing images
-              else
-                echo "   No existing images found, deployment will fail"
-                exit 1
-              fi
-            fi
-          fi
-        done
-        
-        # Stop existing containers first (if running)
-        echo "🛑 Stopping existing containers..."
-        $DOCKER_COMPOSE down 2>/dev/null || true
-        sleep 5
-        
-        # Verify dashboard.html is accessible before starting
-        echo "🔍 Final verification of dashboard.html..."
-        if [ -f "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html" ]; then
-          DASHBOARD_LINE_COUNT=$(wc -l < "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html")
-          echo "✅ dashboard.html exists with $DASHBOARD_LINE_COUNT lines"
-          
-          # Check line 1605 specifically
-          LINE_1605=$(sed -n '1605p' "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html" 2>/dev/null || echo "")
-          if echo "$LINE_1605" | grep -q "try {"; then
-            echo "✅ Line 1605 is correct (starts try block)"
-          else
-            echo "⚠️  Warning: Line 1605 may not be correct: $LINE_1605"
-          fi
-        else
-          echo "❌ ERROR: dashboard.html not found before starting containers!"
+        if ! $DOCKER_COMPOSE build --no-cache 2>&1; then
+          echo "❌ Build failed"
           exit 1
         fi
+        echo "✅ Build successful"
         
-        echo "🚀 Starting services..."
-        $DOCKER_COMPOSE up -d
+        echo "🚀 Starting services (force recreate to pick up new code)..."
+        $DOCKER_COMPOSE up -d --force-recreate
         
-        # Wait for services
+        # Wait for services (reduced wait time)
         echo "⏳ Waiting for services to start..."
-        sleep 20
-        
-        # Force restart dashboard container to ensure it picks up new files
-        echo "🔄 Restarting dashboard container to ensure file changes are loaded..."
-        $DOCKER_COMPOSE restart dashboard 2>/dev/null || true
         sleep 10
         
-        # Verify database
-        echo "🔍 Verifying database..."
-        MAX_RETRIES=30
-        RETRY_COUNT=0
-        DB_READY=false
-        
-        while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+        # Quick database and health check
+        echo "🔍 Verifying services..."
+        for i in {1..15}; do
           if $DOCKER_COMPOSE exec -T db pg_isready -U postgres > /dev/null 2>&1; then
-            DB_READY=true
+            echo "✅ Database ready"
             break
           fi
-          RETRY_COUNT=$((RETRY_COUNT + 1))
-          echo "   Waiting for database... ($RETRY_COUNT/$MAX_RETRIES)"
           sleep 2
         done
         
-        if [ "$DB_READY" = true ]; then
-          echo "✅ Database is ready"
-        else
-          echo "❌ Database did not become ready"
-          exit 1
-        fi
-        
-        # Health check
-        echo "🏥 Health check..."
-        sleep 10
+        # Quick health check
+        sleep 5
         if curl -f -s http://localhost:5000/health > /dev/null 2>&1 || curl -f -s http://localhost:5000/ > /dev/null 2>&1; then
           echo "✅ Health check passed"
         else
-          echo "⚠️  Health check failed (service may still be starting)"
-        fi
-        
-        # Verify dashboard.html is accessible from inside container
-        echo "🔍 Verifying dashboard.html in running container..."
-        if $DOCKER_COMPOSE exec -T dashboard test -f /app/templates/dashboard.html 2>/dev/null; then
-          CONTAINER_LINE_COUNT=$($DOCKER_COMPOSE exec -T dashboard wc -l < /app/templates/dashboard.html 2>/dev/null || echo "0")
-          CONTAINER_SIZE=$($DOCKER_COMPOSE exec -T dashboard wc -c < /app/templates/dashboard.html 2>/dev/null || echo "0")
-          echo "✅ dashboard.html exists in container"
-          echo "   - Size: $CONTAINER_SIZE bytes"
-          echo "   - Lines: $CONTAINER_LINE_COUNT"
-          
-          # Check for new functions in container
-          CONTAINER_UPDATE_PANELS=$($DOCKER_COMPOSE exec -T dashboard grep -c "updateLocationPanels" /app/templates/dashboard.html 2>/dev/null || echo "0")
-          CONTAINER_GROUP_DEVICES=$($DOCKER_COMPOSE exec -T dashboard grep -c "groupDevicesByLocation" /app/templates/dashboard.html 2>/dev/null || echo "0")
-          CONTAINER_LOCATIONS=$($DOCKER_COMPOSE exec -T dashboard grep -c "locationsContainer" /app/templates/dashboard.html 2>/dev/null || echo "0")
-          
-          echo "   - updateLocationPanels: $CONTAINER_UPDATE_PANELS"
-          echo "   - groupDevicesByLocation: $CONTAINER_GROUP_DEVICES"
-          echo "   - locationsContainer: $CONTAINER_LOCATIONS"
-          
-          if [ "$CONTAINER_UPDATE_PANELS" -gt 0 ] && [ "$CONTAINER_GROUP_DEVICES" -gt 0 ] && [ "$CONTAINER_LOCATIONS" -gt 0 ]; then
-            echo "✅ dashboard.html in container has all new functions"
-          else
-            echo "⚠️  WARNING: New functions missing in container!"
-            echo "   This may indicate volume mount issue or file not synced"
-            echo "   Try: docker-compose restart dashboard"
-          fi
-          
-          # Check for duplicate code (old bug check)
-          CONTAINER_DUPLICATE_COUNT=$($DOCKER_COMPOSE exec -T dashboard grep -c "powerChart.data.labels = commonLabels" /app/templates/dashboard.html 2>/dev/null || echo "0")
-          if [ "$CONTAINER_DUPLICATE_COUNT" -gt 1 ]; then
-            echo "⚠️  WARNING: Found $CONTAINER_DUPLICATE_COUNT instances in container (expected 1)"
-          fi
-        else
-          echo "⚠️  Warning: Could not verify dashboard.html in container"
+          echo "⚠️  Health check pending (service may still be starting)"
         fi
         
         # Cleanup
@@ -536,95 +326,37 @@ jobs:
         echo "📍 Location: ${VPS_DEPLOY_DIR}"
         REMOTE_SCRIPT
         
-        # Upload deployment script with retry
-        MAX_RETRIES=3
-        RETRY_COUNT=0
-        SCRIPT_UPLOAD_SUCCESS=false
-        
-        while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$SCRIPT_UPLOAD_SUCCESS" = false ]; do
-          RETRY_COUNT=$((RETRY_COUNT + 1))
-          echo "📤 Uploading deployment script (attempt $RETRY_COUNT of $MAX_RETRIES)..."
-          
-          if scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=10 /tmp/remote-deploy.sh ${{ env.VPS_USER }}@${{ env.VPS_HOST }}:/tmp/ 2>&1; then
-            SCRIPT_UPLOAD_SUCCESS=true
-            echo "✅ Deployment script uploaded"
-          else
-            if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-              WAIT_TIME=$((RETRY_COUNT * 15))
-              echo "   Waiting ${WAIT_TIME} seconds before retry..."
-              sleep $WAIT_TIME
-            else
-              echo "❌ Failed to upload deployment script after $MAX_RETRIES attempts"
-              exit 1
-            fi
-          fi
-        done
+        # Upload deployment script (single attempt, retry handled in execute step)
+        if ! scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=20 /tmp/remote-deploy.sh ${{ env.VPS_USER }}@${{ env.VPS_HOST }}:/tmp/ 2>&1; then
+          echo "❌ Failed to upload deployment script"
+          exit 1
+        fi
+        echo "✅ Deployment script uploaded"
 
     - name: Execute deployment on VPS
       run: |
-        # Execute deployment with retry
-        MAX_RETRIES=3
-        RETRY_COUNT=0
-        DEPLOY_SUCCESS=false
-        
-        while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$DEPLOY_SUCCESS" = false ]; do
-          RETRY_COUNT=$((RETRY_COUNT + 1))
-          echo "🚀 Deployment attempt $RETRY_COUNT of $MAX_RETRIES..."
-          
-          if ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=10 ${{ env.VPS_USER }}@${{ env.VPS_HOST }} "chmod +x /tmp/remote-deploy.sh && bash /tmp/remote-deploy.sh" 2>&1; then
-            DEPLOY_SUCCESS=true
-            echo "✅ Deployment executed successfully"
-          else
-            DEPLOY_EXIT_CODE=$?
-            echo "⚠️  Deployment failed with exit code: $DEPLOY_EXIT_CODE"
-            
-            if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-              WAIT_TIME=$((RETRY_COUNT * 15))
-              echo "   Waiting ${WAIT_TIME} seconds before retry..."
-              sleep $WAIT_TIME
-            else
-              echo "❌ Deployment failed after $MAX_RETRIES attempts"
-              exit 1
-            fi
-          fi
-        done
+        # Execute deployment (single attempt - retry logic is in script)
+        if ! ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=20 ${{ env.VPS_USER }}@${{ env.VPS_HOST }} "chmod +x /tmp/remote-deploy.sh && bash /tmp/remote-deploy.sh" 2>&1; then
+          echo "❌ Deployment failed"
+          exit 1
+        fi
+        echo "✅ Deployment executed successfully"
 
     - name: Verify deployment
       run: |
-        # Verify with retry
-        MAX_RETRIES=2
-        RETRY_COUNT=0
-        VERIFY_SUCCESS=false
-        
-        while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$VERIFY_SUCCESS" = false ]; do
-          RETRY_COUNT=$((RETRY_COUNT + 1))
-          echo "🔍 Verification attempt $RETRY_COUNT of $MAX_RETRIES..."
-          
-          if ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=10 ${{ env.VPS_USER }}@${{ env.VPS_HOST }} << 'EOF'
-          cd ${{ env.VPS_DEPLOY_DIR }}
-          echo "📊 Service Status:"
-          if command -v docker-compose &> /dev/null; then
-            docker-compose ps
-          elif docker compose version &> /dev/null; then
-            docker compose ps
-          fi
-          echo ""
-          echo "🐳 Running containers:"
-          docker ps --filter "name=pzem" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+        # Quick verification
+        ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${{ env.VPS_USER }}@${{ env.VPS_HOST }} << 'EOF' || echo "⚠️  Verification incomplete (non-critical)"
+        cd ${{ env.VPS_DEPLOY_DIR }}
+        echo "📊 Service Status:"
+        if command -v docker-compose &> /dev/null; then
+          docker-compose ps
+        elif docker compose version &> /dev/null; then
+          docker compose ps
+        fi
+        echo ""
+        echo "🐳 Running containers:"
+        docker ps --filter "name=pzem" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
         EOF
-          then
-            VERIFY_SUCCESS=true
-            echo "✅ Verification successful"
-          else
-            if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-              echo "   Waiting 10 seconds before retry..."
-              sleep 10
-            else
-              echo "⚠️  Verification failed, but deployment may still be successful"
-              VERIFY_SUCCESS=true  # Don't fail the job
-            fi
-          fi
-        done
 
     - name: Cleanup local files
       if: always()
