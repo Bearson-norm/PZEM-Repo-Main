@@ -17,6 +17,7 @@ import time
 import logging
 from decimal import Decimal
 import os
+from contextlib import contextmanager
 from psycopg2.pool import SimpleConnectionPool
 import pytz
 import re
@@ -50,7 +51,12 @@ DB_CONFIG = {
     'host': os.getenv('DB_HOST', 'localhost'),
     'database': os.getenv('DB_NAME', 'pzem_monitoring'),
     'user': os.getenv('DB_USER', 'postgres'),
-    'password': os.getenv('DB_PASS', 'Admin123')
+    'password': os.getenv('DB_PASS', 'Admin123'),
+    'connect_timeout': 10,
+    'keepalives': 1,
+    'keepalives_idle': 30,
+    'keepalives_interval': 10,
+    'keepalives_count': 3,
 }
 
 
@@ -90,6 +96,27 @@ class DatabaseManager:
         # Connection health tracking
         self.last_health_check = datetime.now()
         self.health_check_interval = 300  # 5 minutes
+    
+    @contextmanager
+    def pool_connection(self):
+        """Get a connection from pool - use with 'with' to ensure proper return.
+        Prevents 'execute cannot be used while an asynchronous query is underway'
+        when eventlet runs concurrent greenlets."""
+        conn = self.pool.getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SET statement_timeout = '30s'")
+            cursor.close()
+            conn.commit()
+            yield conn
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            self.pool.putconn(conn)
     
     def _get_cache_key(self, key, *args):
         """Generate cache key"""
@@ -258,40 +285,40 @@ class DatabaseManager:
             return self._get_cached(cache_key)
         
         try:
-            conn = self.get_connection()
-            cursor = conn.cursor(cursor_factory=RealDictCursor)
-            
-            # Total devices
-            cursor.execute("SELECT COUNT(DISTINCT device_address) as total FROM pzem_data")
-            total_devices = cursor.fetchone()['total'] or 0
-            
-            # Online devices dengan perhitungan yang akurat
-            cursor.execute("""
-                WITH latest_per_device AS (
-                    SELECT DISTINCT ON (device_address) 
-                        device_address, 
-                        created_at,
-                        COALESCE(power, 0) as power,
-                        COALESCE(energy, 0) as energy
-                    FROM pzem_data 
-                    ORDER BY device_address, created_at DESC
-                ),
-                online_devices AS (
-                    SELECT *,
-                        CASE WHEN created_at >= NOW() - INTERVAL '10 minutes' 
-                             THEN 1 ELSE 0 END as is_online
-                    FROM latest_per_device
-                )
-                SELECT 
-                    COUNT(*) as total_devices,
-                    SUM(is_online) as online_devices,
-                    SUM(CASE WHEN is_online = 1 THEN power ELSE 0 END) as total_power,
-                    SUM(CASE WHEN is_online = 1 THEN energy ELSE 0 END) as total_energy
-                FROM online_devices
-            """)
-            
-            stats = cursor.fetchone()
-            cursor.close()
+            with self.pool_connection() as conn:
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                
+                # Total devices
+                cursor.execute("SELECT COUNT(DISTINCT device_address) as total FROM pzem_data")
+                total_devices = cursor.fetchone()['total'] or 0
+                
+                # Online devices dengan perhitungan yang akurat
+                cursor.execute("""
+                    WITH latest_per_device AS (
+                        SELECT DISTINCT ON (device_address) 
+                            device_address, 
+                            created_at,
+                            COALESCE(power, 0) as power,
+                            COALESCE(energy, 0) as energy
+                        FROM pzem_data 
+                        ORDER BY device_address, created_at DESC
+                    ),
+                    online_devices AS (
+                        SELECT *,
+                            CASE WHEN created_at >= NOW() - INTERVAL '10 minutes' 
+                                 THEN 1 ELSE 0 END as is_online
+                        FROM latest_per_device
+                    )
+                    SELECT 
+                        COUNT(*) as total_devices,
+                        SUM(is_online) as online_devices,
+                        SUM(CASE WHEN is_online = 1 THEN power ELSE 0 END) as total_power,
+                        SUM(CASE WHEN is_online = 1 THEN energy ELSE 0 END) as total_energy
+                    FROM online_devices
+                """)
+                
+                stats = cursor.fetchone()
+                cursor.close()
             
             result = {
                 'total_devices': int(stats['total_devices'] or 0),
@@ -308,12 +335,6 @@ class DatabaseManager:
             
         except psycopg2_errors.InFailedSqlTransaction as e:
             logger.error(f"Transaction error in get_system_status: {e}")
-            try:
-                conn = self.get_connection()
-                conn.rollback()
-                logger.info("Transaction rolled back successfully in get_system_status")
-            except Exception as rollback_error:
-                logger.error(f"Error during rollback in get_system_status: {rollback_error}")
             error_result = {
                 'total_devices': 0,
                 'online_devices': 0,
@@ -326,14 +347,6 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error getting system status: {e}")
             logger.error(f"Error type: {type(e).__name__}")
-            # Try to rollback transaction if connection exists
-            try:
-                conn = self.get_connection()
-                if conn.status == psycopg2_extensions.STATUS_IN_TRANSACTION:
-                    conn.rollback()
-                    logger.info("Transaction rolled back after error in get_system_status")
-            except:
-                pass
             error_result = {
                 'total_devices': 0,
                 'online_devices': 0,
@@ -413,20 +426,15 @@ class DatabaseManager:
     def get_device_data(self, device_address, period='hour', limit=100):
         """Ambil data device berdasarkan periode"""
         try:
-            conn = self.get_connection()
-            cursor = conn.cursor(cursor_factory=RealDictCursor)
-            
             period_config = {
                 'hour': {'interval': '1 hour', 'limit': 60},
                 'day': {'interval': '1 day', 'limit': 144},
                 'week': {'interval': '1 week', 'limit': 168},
                 'month': {'interval': '1 month', 'limit': 120}
             }
-            
             config = period_config.get(period, period_config['hour'])
             interval = config['interval']
             default_limit = config['limit']
-            
             query = f"""
             SELECT 
                 device_address, voltage, current, power, energy, frequency,
@@ -438,11 +446,11 @@ class DatabaseManager:
             ORDER BY created_at DESC
             LIMIT %s
             """
-            
-            cursor.execute(query, (device_address, limit or default_limit))
-            data = cursor.fetchall()
-            cursor.close()
-            
+            with self.pool_connection() as conn:
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                cursor.execute(query, (device_address, limit or default_limit))
+                data = cursor.fetchall()
+                cursor.close()
             return [self.serialize_data(dict(row)) for row in data]
             
         except Exception as e:
@@ -452,9 +460,6 @@ class DatabaseManager:
     def get_aggregated_data(self, device_address, period='hour'):
         """Data agregat dengan downsampling untuk performa yang lebih baik"""
         try:
-            conn = self.get_connection()
-            cursor = conn.cursor(cursor_factory=RealDictCursor)
-            
             # Konfigurasi dengan downsampling untuk performa
             period_configs = {
                 'hour': {
@@ -499,10 +504,11 @@ class DatabaseManager:
             HAVING COUNT(*) > 0
             ORDER BY time_period ASC
             """
-            
-            cursor.execute(query, (device_address,))
-            data = cursor.fetchall()
-            cursor.close()
+            with self.pool_connection() as conn:
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                cursor.execute(query, (device_address,))
+                data = cursor.fetchall()
+                cursor.close()
             
             # Downsampling tambahan jika masih terlalu banyak points
             if len(data) > config['max_points']:
@@ -539,14 +545,14 @@ class DatabaseManager:
             return self._get_cached(cache_key)
         
         try:
-            conn = self.get_connection()
-            cursor = conn.cursor(cursor_factory=RealDictCursor)
-            
-            # Query dengan konversi timezone yang benar dan include building/phase dari pzem_devices
-            # Removed 24-hour filter to show latest data regardless of when it was received
-            # Using DISTINCT ON ensures we get the most recent data per device
-            query = """
-            SELECT DISTINCT ON (d.device_address) 
+            with self.pool_connection() as conn:
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                
+                # Query dengan konversi timezone yang benar dan include building/phase dari pzem_devices
+                # Removed 24-hour filter to show latest data regardless of when it was received
+                # Using DISTINCT ON ensures we get the most recent data per device
+                query = """
+                SELECT DISTINCT ON (d.device_address) 
                 d.device_address,
                 COALESCE(d.voltage, 0) as voltage,
                 COALESCE(d.current, 0) as current,
@@ -579,14 +585,13 @@ class DatabaseManager:
                 COALESCE(dm.device_name, 'Device ' || d.device_address) as device_name
             FROM pzem_data d
             LEFT JOIN pzem_devices dm ON d.device_address = dm.device_address
-            ORDER BY d.device_address, d.created_at DESC
-            """
-            
-            cursor.execute(query)
-            data = cursor.fetchall()
-            cursor.close()
-            # Commit transaction to ensure data consistency
-            conn.commit()
+                ORDER BY d.device_address, d.created_at DESC
+                """
+                
+                cursor.execute(query)
+                data = cursor.fetchall()
+                cursor.close()
+                conn.commit()
             
             logger.info(f"Retrieved {len(data)} devices from database (no time filter - showing all latest data)")
             
@@ -659,25 +664,11 @@ class DatabaseManager:
             
         except psycopg2_errors.InFailedSqlTransaction as e:
             logger.error(f"Transaction error in get_all_latest_data: {e}")
-            try:
-                conn = self.get_connection()
-                conn.rollback()
-                logger.info("Transaction rolled back successfully")
-            except Exception as rollback_error:
-                logger.error(f"Error during rollback: {rollback_error}")
             return {}
         except Exception as e:
             logger.error(f"Error getting all latest data: {e}")
             logger.error(f"Error type: {type(e).__name__}")
             logger.error(f"Error details: {str(e)}")
-            # Try to rollback transaction if connection exists
-            try:
-                conn = self.get_connection()
-                if conn.status == psycopg2_extensions.STATUS_IN_TRANSACTION:
-                    conn.rollback()
-                    logger.info("Transaction rolled back after error")
-            except:
-                pass
             return {}
 
     def get_three_phase_summary(self):
@@ -691,12 +682,12 @@ class DatabaseManager:
             return self._get_cached(cache_key)
         
         try:
-            conn = self.get_connection()
-            cursor = conn.cursor(cursor_factory=RealDictCursor)
-            
-            # Get latest data per device (no time filter to show all devices)
-            query = """
-            WITH latest_data AS (
+            with self.pool_connection() as conn:
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                
+                # Get latest data per device (no time filter to show all devices)
+                query = """
+                WITH latest_data AS (
                 SELECT DISTINCT ON (device_address) 
                     device_address, power, voltage, current, power_factor, energy
                 FROM pzem_data 
@@ -712,13 +703,13 @@ class DatabaseManager:
                 STDDEV(power) as power_stddev,
                 STDDEV(voltage) as voltage_stddev,
                 STDDEV(current) as current_stddev
-            FROM latest_data
-            WHERE power IS NOT NULL AND voltage IS NOT NULL AND current IS NOT NULL
-            """
-            
-            cursor.execute(query)
-            result = cursor.fetchone()
-            cursor.close()
+                FROM latest_data
+                WHERE power IS NOT NULL AND voltage IS NOT NULL AND current IS NOT NULL
+                """
+                
+                cursor.execute(query)
+                result = cursor.fetchone()
+                cursor.close()
             
             if result:
                 total_active = float(result['total_active_power'] or 0)
@@ -869,26 +860,26 @@ def api_chart_data(device_address):
 def api_debug_latest_raw():
     """Debug endpoint untuk melihat raw data"""
     try:
-        conn = db_manager.get_connection()
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
-        
-        query = """
-        SELECT DISTINCT ON (device_address) 
-            device_address,
-            voltage, current, power, energy,
-            created_at,
-            created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jakarta' as jakarta_time,
-            EXTRACT(EPOCH FROM (NOW() - created_at))/60 as minutes_ago,
-            CASE WHEN created_at >= NOW() - INTERVAL '10 minutes' THEN 'ONLINE' ELSE 'OFFLINE' END as status
-        FROM pzem_data 
-        WHERE created_at >= NOW() - INTERVAL '24 hours'
-        ORDER BY device_address, created_at DESC
-        LIMIT 10
-        """
-        
-        cursor.execute(query)
-        raw_data = cursor.fetchall()
-        cursor.close()
+        with db_manager.pool_connection() as conn:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            query = """
+            SELECT DISTINCT ON (device_address) 
+                device_address,
+                voltage, current, power, energy,
+                created_at,
+                created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jakarta' as jakarta_time,
+                EXTRACT(EPOCH FROM (NOW() - created_at))/60 as minutes_ago,
+                CASE WHEN created_at >= NOW() - INTERVAL '10 minutes' THEN 'ONLINE' ELSE 'OFFLINE' END as status
+            FROM pzem_data 
+            WHERE created_at >= NOW() - INTERVAL '24 hours'
+            ORDER BY device_address, created_at DESC
+            LIMIT 10
+            """
+            
+            cursor.execute(query)
+            raw_data = cursor.fetchall()
+            cursor.close()
         
         result = []
         for row in raw_data:

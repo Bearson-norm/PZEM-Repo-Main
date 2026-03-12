@@ -128,10 +128,11 @@ def example_6_validation_scenarios():
     print("CONTOH 6: Skenario Validasi")
     print("=" * 60)
     
+    # R1: 900 kWh @ 1352, >900 @ 1445, abonemen 11000, PPN 11%
     test_cases = [
         {'energy': 500, 'expected': 762570, 'desc': 'R1, 500 kWh (hanya blok 1)'},
         {'energy': 1200, 'expected': 1844043, 'desc': 'R1, 1200 kWh (blok 1 + 2)'},
-        {'energy': 2000, 'expected': 2890043, 'desc': 'R1, 2000 kWh (blok 1 + 2 besar)'},
+        {'energy': 2000, 'expected': 3127203, 'desc': 'R1, 2000 kWh (900*1352 + 1100*1445 + 11000 + PPN)'},
     ]
     
     print(f"\n{'Konsumsi':<10} {'Hasil':<20} {'Expected':<20} {'Status':<10}")

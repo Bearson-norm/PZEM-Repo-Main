@@ -255,6 +255,16 @@ def report_dashboard():
         
         <form id="reportForm">
             <div class="form-group">
+                <label for="location">
+                    <i class="fas fa-map-marker-alt"></i> Location
+                </label>
+                <select id="location" name="location">
+                    <option value="All Locations">All Locations</option>
+                </select>
+                <small style="color: #666; display: block; margin-top: 4px;">Filter report by building/location</small>
+            </div>
+            
+            <div class="form-group">
                 <label for="periodType">
                     <i class="fas fa-calendar"></i> Report Period
                 </label>
@@ -286,12 +296,32 @@ def report_dashboard():
     </div>
     
     <script>
-        document.addEventListener('DOMContentLoaded', function() {
+        document.addEventListener('DOMContentLoaded', async function() {
             const form = document.getElementById('reportForm');
             const periodSelect = document.getElementById('periodType');
             const customDateRange = document.getElementById('customDateRange');
+            const locationSelect = document.getElementById('location');
             const generateBtn = document.getElementById('generateBtn');
             const statusDiv = document.getElementById('status');
+            
+            // Load locations for dropdown
+            try {
+                const locResponse = await fetch('/reports/api/locations');
+                if (locResponse.ok) {
+                    const locData = await locResponse.json();
+                    if (locData.locations && locData.locations.length > 0) {
+                        locationSelect.innerHTML = '';
+                        locData.locations.forEach(loc => {
+                            const opt = document.createElement('option');
+                            opt.value = loc;
+                            opt.textContent = loc;
+                            locationSelect.appendChild(opt);
+                        });
+                    }
+                }
+            } catch (e) {
+                console.warn('Could not load locations:', e);
+            }
             
             periodSelect.addEventListener('change', function() {
                 if (this.value === 'custom') {
@@ -378,33 +408,39 @@ def generate_report():
         period_type = request.args.get('period_type', 'daily')
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
-        
+        location = request.args.get('location')
+
+        # Normalize location: treat None, empty, or 'All Locations' as no filter
+        if not location or location.strip() == '' or location == 'All Locations':
+            location = None
+
         start_dt = None
         end_dt = None
-        
+
         if start_date:
             try:
                 start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
             except:
                 pass
-                
+
         if end_date:
             try:
                 end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
             except:
                 pass
-        
-        logger.info(f"Generating {period_type} report from {start_dt} to {end_dt}")
-        
+
+        logger.info(f"Generating {period_type} report from {start_dt} to {end_dt}, location: {location or 'All'}")
+
         # Create a new database manager for this request to avoid connection conflicts
         from report_generator import DatabaseManager, ReportGenerator
         db_manager = DatabaseManager()
         report_gen = ReportGenerator(db_manager)
-        
+
         output_file = report_gen.generate_report(
             period_type=period_type,
             start_date=start_dt,
-            end_date=end_dt
+            end_date=end_dt,
+            location=location
         )
         
         if output_file and os.path.exists(output_file):
@@ -501,6 +537,18 @@ def preview_report(filename):
     except Exception as e:
         logger.error(f"Error previewing report: {e}")
         return jsonify({'error': 'Preview error'}), 500
+
+@report_bp.route('/api/locations')
+def report_locations():
+    """Get list of locations for report filtering"""
+    try:
+        from report_generator import DatabaseManager
+        db_manager = DatabaseManager()
+        locations = db_manager.get_locations()
+        return jsonify({'locations': locations})
+    except Exception as e:
+        logger.error(f"Error getting locations: {e}")
+        return jsonify({'locations': ['All Locations']})
 
 @report_bp.route('/api/summary')
 def report_summary():

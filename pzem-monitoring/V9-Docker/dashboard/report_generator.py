@@ -242,8 +242,54 @@ class DatabaseManager:
             if conn:
                 self.close_connection(conn)
     
-    def get_report_data(self, period_type='daily', start_date=None, end_date=None):
-        """Get data for report generation with simplified queries to avoid hanging"""
+    def get_locations(self):
+        """Get list of distinct locations (buildings) for report filtering"""
+        conn = None
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            locations_set = set()
+
+            # From pzem_devices.location
+            cursor.execute("""
+                SELECT DISTINCT location FROM pzem_devices
+                WHERE location IS NOT NULL AND TRIM(location) != ''
+            """)
+            for row in cursor.fetchall():
+                loc = (row.get('location') or '').strip()
+                if loc:
+                    locations_set.add(loc)
+
+            # From device_address pattern (e.g., CKPG1-R -> CKPG1)
+            cursor.execute("""
+                SELECT DISTINCT SPLIT_PART(device_address, '-', 1) as loc
+                FROM pzem_data
+                WHERE device_address LIKE '%-%'
+            """)
+            for row in cursor.fetchall():
+                loc = (row.get('loc') or '').strip()
+                if loc and len(loc) > 1:
+                    locations_set.add(loc)
+
+            cursor.close()
+            locations = sorted(locations_set)
+            return ['All Locations'] + locations if locations else ['All Locations']
+        except Exception as e:
+            logger.error(f"Error getting locations: {e}")
+            return ['All Locations']
+        finally:
+            if conn:
+                self.close_connection(conn)
+
+    def get_report_data(self, period_type='daily', start_date=None, end_date=None, location=None):
+        """Get data for report generation with simplified queries to avoid hanging.
+        
+        Args:
+            period_type: daily, weekly, monthly, or custom
+            start_date: Start of period
+            end_date: End of period  
+            location: Optional location/building filter. Use 'All Locations' or None for all.
+        """
         conn = None
         try:
             logger.info("Starting simplified report data query")
@@ -265,6 +311,19 @@ class DatabaseManager:
                     start_date = end_date - timedelta(weeks=1)
                 elif period_type == 'monthly':
                     start_date = end_date - timedelta(days=30)
+            
+            location_filter = ""
+            location_params = []
+            if location and location != 'All Locations' and location.strip():
+                # Filter by location: join with pzem_devices or match device_address pattern
+                location_filter = """
+                AND (
+                    dm.location = %s 
+                    OR p.device_address LIKE %s
+                )
+                """
+                location_params = [location, f"{location}-%"]
+                logger.info(f"Filtering report by location: {location}")
             
             logger.info(f"Querying data from {start_date} to {end_date}")
             
@@ -290,19 +349,20 @@ class DatabaseManager:
             simple_query = """
             WITH energy_data AS (
                 SELECT 
-                    device_address,
-                    created_at,
-                    COALESCE(power, 0) as power,
-                    COALESCE(energy, 0) as energy,
-                    LAG(created_at) OVER (PARTITION BY device_address ORDER BY created_at) as prev_time,
-                    LAG(COALESCE(power, 0)) OVER (PARTITION BY device_address ORDER BY created_at) as prev_power
-                FROM pzem_data 
-                WHERE created_at >= %s AND created_at <= %s
+                    p.device_address,
+                    p.created_at,
+                    COALESCE(p.power, 0) as power,
+                    COALESCE(p.energy, 0) as energy,
+                    LAG(p.created_at) OVER (PARTITION BY p.device_address ORDER BY p.created_at) as prev_time,
+                    LAG(COALESCE(p.power, 0)) OVER (PARTITION BY p.device_address ORDER BY p.created_at) as prev_power
+                FROM pzem_data p
+                LEFT JOIN pzem_devices dm ON p.device_address = dm.device_address
+                WHERE p.created_at >= %s AND p.created_at <= %s
+                """ + location_filter + """
             ),
             energy_calc AS (
                 SELECT 
                     device_address,
-                    -- Calculate energy from power using trapezoidal integration
                     SUM(
                         CASE 
                             WHEN prev_time IS NOT NULL AND prev_time < created_at
@@ -325,18 +385,14 @@ class DatabaseManager:
                 AVG(COALESCE(p.frequency, 50)) as avg_frequency,
                 AVG(COALESCE(p.power_factor, 1)) as avg_power_factor,
                 CASE 
-                    -- Method 1: Use energy counter if available and valid (most accurate)
-                    -- Check if energy counter is valid (not reset, reasonable value)
                     WHEN MAX(p.energy) IS NOT NULL AND MIN(p.energy) IS NOT NULL 
                          AND MAX(p.energy) >= MIN(p.energy)
                          AND (MAX(p.energy) - MIN(p.energy)) >= 0
-                         AND (MAX(p.energy) - MIN(p.energy)) < 10000  -- Sanity check: energy diff < 10000 kWh
-                         AND COUNT(*) > 1  -- Need at least 2 records for valid calculation
+                         AND (MAX(p.energy) - MIN(p.energy)) < 10000
+                         AND COUNT(*) > 1
                     THEN GREATEST(0, MAX(p.energy) - MIN(p.energy))
-                    -- Method 2: Use calculated energy from power integration (more accurate than simple average)
                     WHEN ec.energy_from_power IS NOT NULL AND ec.energy_from_power > 0
                     THEN ec.energy_from_power
-                    -- Method 3: Fallback to average power * duration (least accurate)
                     ELSE (
                         GREATEST(0, AVG(COALESCE(p.power, 0)) * 
                         EXTRACT(EPOCH FROM (MAX(p.created_at) - MIN(p.created_at))) / 3600.0 / 1000.0)
@@ -347,15 +403,18 @@ class DatabaseManager:
                 MAX(COALESCE(p.energy, 0)) as max_energy,
                 MIN(COALESCE(p.energy, 0)) as min_energy
             FROM pzem_data p
+            LEFT JOIN pzem_devices dm ON p.device_address = dm.device_address
             LEFT JOIN energy_calc ec ON p.device_address = ec.device_address
             WHERE p.created_at >= %s AND p.created_at <= %s
+            """ + location_filter + """
             GROUP BY p.device_address, ec.energy_from_power
             ORDER BY p.device_address
-            LIMIT 10
+            LIMIT 50
             """
             
             logger.info("Executing phase data query with improved energy calculation...")
-            cursor.execute(simple_query, (start_date, end_date, start_date, end_date))
+            query_params = [start_date, end_date] + location_params + [start_date, end_date] + location_params
+            cursor.execute(simple_query, tuple(query_params))
             phase_data = cursor.fetchall()
             
             logger.info(f"Found {len(phase_data)} devices/phases")
@@ -370,21 +429,24 @@ class DatabaseManager:
             # Simplified time series query - just get recent points
             time_series_query = """
             SELECT 
-                DATE_TRUNC('hour', created_at) as time_period,
-                device_address,
-                AVG(COALESCE(power, 0)) as power,
-                AVG(COALESCE(voltage, 220)) as voltage,
-                AVG(COALESCE(current, 0)) as current,
+                DATE_TRUNC('hour', p.created_at) as time_period,
+                p.device_address,
+                AVG(COALESCE(p.power, 0)) as power,
+                AVG(COALESCE(p.voltage, 220)) as voltage,
+                AVG(COALESCE(p.current, 0)) as current,
                 COUNT(*) as sample_count
-            FROM pzem_data 
-            WHERE created_at >= %s AND created_at <= %s
-            GROUP BY time_period, device_address
-            ORDER BY time_period DESC, device_address
-            LIMIT 100
+            FROM pzem_data p
+            LEFT JOIN pzem_devices dm ON p.device_address = dm.device_address
+            WHERE p.created_at >= %s AND p.created_at <= %s
+            """ + location_filter + """
+            GROUP BY time_period, p.device_address
+            ORDER BY time_period DESC, p.device_address
+            LIMIT 200
             """
             
             logger.info("Executing time series query...")
-            cursor.execute(time_series_query, (start_date, end_date))
+            time_series_params = [start_date, end_date] + location_params
+            cursor.execute(time_series_query, tuple(time_series_params))
             time_series_data = cursor.fetchall()
             
             logger.info(f"Found {len(time_series_data)} time series points")
@@ -524,14 +586,21 @@ class ReportGenerator:
                    colors=colors_pie[:len(powers)], startangle=90)
             plt.title('Power Distribution by Phase', fontsize=14, fontweight='bold')
     
-    def generate_report(self, period_type='daily', start_date=None, end_date=None, output_file=None):
-        """Generate comprehensive PDF report with enhanced error handling"""
+    def generate_report(self, period_type='daily', start_date=None, end_date=None, location=None, output_file=None):
+        """Generate comprehensive PDF report with enhanced error handling.
+        
+        Args:
+            period_type: daily, weekly, monthly, or custom
+            start_date: Start of period
+            end_date: End of period
+            location: Optional location/building filter (e.g., 'CKPG1'). Use None or 'All Locations' for all.
+        """
         chart_files = []  # Track temporary files for cleanup
         
         try:
             # Get data from database
-            logger.info(f"Fetching report data for period: {period_type}")
-            data = self.db_manager.get_report_data(period_type, start_date, end_date)
+            logger.info(f"Fetching report data for period: {period_type}, location: {location or 'All'}")
+            data = self.db_manager.get_report_data(period_type, start_date, end_date, location)
             if not data:
                 logger.error("No data available for report generation")
                 return None
@@ -555,13 +624,15 @@ class ReportGenerator:
             story = []
             
             # Title
-            title = f"PZEM 3-Phase Energy Monitoring Report<br/>{period_type.title()} Report"
+            location_suffix = f" - {location}" if location and location != 'All Locations' else ""
+            title = f"PZEM 3-Phase Energy Monitoring Report<br/>{period_type.title()} Report{location_suffix}"
             story.append(Paragraph(title, self.title_style))
             story.append(Spacer(1, 20))
             
             # Period info
             period_info = f"""
             <b>Report Period:</b> {data['start_date'].strftime('%Y-%m-%d %H:%M')} to {data['end_date'].strftime('%Y-%m-%d %H:%M')}<br/>
+            <b>Location:</b> {location if (location and location != 'All Locations') else 'All Locations'}<br/>
             <b>Generated:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}<br/>
             <b>Total Phases:</b> {len(data['phase_data'])}
             """
@@ -739,6 +810,13 @@ class ReportGenerator:
                 PPN: {tariff_info['ppn_percent']:.0f}%
                 """
                 story.append(Paragraph(tariff_info_text, self.normal_style))
+                # Note for period reports: abonemen is monthly
+                if period_type in ('daily', 'weekly'):
+                    days = 1 if period_type == 'daily' else 7
+                    story.append(Paragraph(
+                        f"<i>Note: Abonemen is monthly. For this {period_type} period, proportional abonemen ≈ Rp {pln_billing['abonemen_idr'] * days / 30:,.0f}</i>",
+                        self.normal_style
+                    ))
                 story.append(Spacer(1, 20))
             
             # Charts (if data available)

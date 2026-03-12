@@ -22,6 +22,9 @@ services:
     volumes:
       - ./dashboard:/app
       - reports_data:/app/reports
+    # Prevent OOM kill - reserve memory for dashboard
+    mem_limit: 512m
+    mem_reservation: 256m
 
   mqtt-listener:
     build: ./mqtt

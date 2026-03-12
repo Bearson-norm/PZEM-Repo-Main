@@ -28,4 +28,7 @@ ENV MPLBACKEND=Agg
 EXPOSE 5000
 
 # Use gunicorn with eventlet for WebSocket support
-CMD ["gunicorn", "-k", "eventlet", "-w", "1", "-b", "0.0.0.0:5000", "--timeout", "120", "app_with_reporting:app"]
+# --timeout 120: worker has 2min to respond before SIGKILL
+# --graceful-timeout 30: allow 30s for graceful shutdown
+# --keep-alive 5: HTTP keep-alive
+CMD ["gunicorn", "-k", "eventlet", "-w", "1", "-b", "0.0.0.0:5000", "--timeout", "120", "--graceful-timeout", "30", "--keep-alive", "5", "app_with_reporting:app"]

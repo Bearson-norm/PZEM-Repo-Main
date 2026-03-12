@@ -23,7 +23,8 @@ JAKARTA_TZ = pytz.timezone('Asia/Jakarta')
 MQTT_BROKER = "103.87.67.139"
 MQTT_PORT = 1883
 MQTT_TOPICS = [
-    "energy/3phase/+/phase/+/data",  # Pattern untuk 3-phase system: energy/3phase/{building}/phase/{R|S|T}/data
+    "energy/3phase/+/phase/+/data",   # Standard: energy/3phase/{site}/phase/{R|S|T}/data
+    "energy/3phase/+/+/phase/+/data",  # Extended: energy/3phase/{parent}/{child}/phase/{R|S|T}/data
     "energy/pzem/data"  # Direct PZEM data topic
 ]
 MQTT_QOS = 1
@@ -398,19 +399,29 @@ class MQTTClient:
             jakarta_time = datetime.now(JAKARTA_TZ)
             logger.info(f"[MESSAGE #{self.message_count}] Topic: {msg.topic} at {jakarta_time.strftime('%Y-%m-%d %H:%M:%S')} WIB")
             
-            # Extract building and phase from topic
+            # Extract building (site) and phase from topic
             building = None
             phase = None
+            from_3phase_topic = False
             try:
                 topic_parts = msg.topic.split('/')
                 
                 # Handle different topic formats
                 if msg.topic.startswith('energy/3phase/'):
-                    # Topic format: energy/3phase/{building}/phase/{R|S|T}/data
-                    if len(topic_parts) >= 5:
-                        building = topic_parts[2]  # building ID
-                        phase = topic_parts[4].upper()  # R, S, or T
-                        logger.debug(f"[TOPIC] Building: {building}, Phase: {phase}")
+                    # Standard: energy/3phase/{site}/phase/{R|S|T}/data (6 parts)
+                    #   topic_parts[2]=site, topic_parts[4]=phase
+                    # Extended: energy/3phase/{parent}/{child}/phase/{R|S|T}/data (7 parts)
+                    #   topic_parts[2]=parent, topic_parts[3]=child, topic_parts[5]=phase
+                    if len(topic_parts) >= 7:
+                        building = f"{topic_parts[2]}-{topic_parts[3]}"  # parent-child
+                        phase = topic_parts[5].upper()
+                        from_3phase_topic = True
+                        logger.debug(f"[TOPIC] Site: {building}, Phase: {phase} (extended)")
+                    elif len(topic_parts) >= 5:
+                        building = topic_parts[2]
+                        phase = topic_parts[4].upper()
+                        from_3phase_topic = True
+                        logger.debug(f"[TOPIC] Site: {building}, Phase: {phase} (multi-site)")
                 elif msg.topic == 'energy/pzem/data':
                     # Direct PZEM data - building/phase will be determined from device_address mapping
                     logger.debug(f"[TOPIC] Direct PZEM data - will use device_address mapping")
@@ -436,16 +447,24 @@ class MQTTClient:
                 logger.error(f"[ERROR] Expected JSON object, got {type(data)}")
                 return
             
-            # Extract device_address early to check mapping
-            device_address = data.get('device_address') or data.get('device_id') or data.get('pzem_address') or data.get('address')
-            
-            # Check device_address mapping for CKPG1 (1,2,3 -> CKPG1 R,S,T)
-            if device_address and str(device_address).strip() in DEVICE_BUILDING_MAP:
-                mapping = DEVICE_BUILDING_MAP[str(device_address).strip()]
-                # Override building and phase from mapping
-                building = mapping["building"]
-                phase = mapping["phase"]
-                logger.info(f"[MAPPING] Device {device_address} mapped to {building} Phase {phase}")
+            # Multi-site handling: For energy/3phase/{site}/phase/{R|S|T}/data, use topic as source of truth
+            # to ensure unique device_address per site (e.g., SiteA-R, SiteB-S) - prevents collision when
+            # multiple sites use same payload device_address (1, 2, 3)
+            if from_3phase_topic and building and phase:
+                data['device_address'] = f"{building}-{phase}"
+                data['building'] = building
+                data['phase'] = phase
+                data['phase_id'] = phase
+                logger.debug(f"[MULTI-SITE] device_address={data['device_address']} from topic")
+            else:
+                # energy/pzem/data: use payload device_address and apply mapping if needed
+                device_address = data.get('device_address') or data.get('device_id') or data.get('pzem_address') or data.get('address')
+                
+                if device_address and str(device_address).strip() in DEVICE_BUILDING_MAP:
+                    mapping = DEVICE_BUILDING_MAP[str(device_address).strip()]
+                    building = mapping["building"]
+                    phase = mapping["phase"]
+                    logger.info(f"[MAPPING] Device {device_address} mapped to {building} Phase {phase}")
             
             # Add building and phase to data (from topic or from mapping)
             if building:
@@ -461,7 +480,7 @@ class MQTTClient:
                 data['phase'] = data['phase_id']
             
             # Log key data points
-            device = device_address or 'Unknown'
+            device = data.get('device_address') or 'Unknown'
             # Handle both direct and nested current_data
             power = data.get('power') or data.get('avg_power') or data.get('active_power')
             if not power and isinstance(data.get('current_data'), dict):
