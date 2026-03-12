@@ -134,13 +134,13 @@ jobs:
         # Make scripts executable
         chmod +x ${VPS_DEPLOY_DIR}/*.sh 2>/dev/null || true
         
-        # Build and start
-        echo "🔨 Building containers..."
+        # Build and start (no cache + force recreate to ensure code changes are applied)
+        echo "🔨 Building containers (no cache)..."
         cd "${VPS_DEPLOY_DIR}"
-        $DOCKER_COMPOSE build
+        $DOCKER_COMPOSE build --no-cache
         
-        echo "🚀 Starting services..."
-        $DOCKER_COMPOSE up -d
+        echo "🚀 Starting services (force recreate)..."
+        $DOCKER_COMPOSE up -d --force-recreate
         
         # Wait for services
         echo "⏳ Waiting for services..."
