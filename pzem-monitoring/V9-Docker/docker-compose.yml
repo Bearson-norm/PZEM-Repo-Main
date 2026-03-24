@@ -7,6 +7,8 @@ services:
       POSTGRES_PASSWORD: Admin123
     volumes:
       - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5412:5432"
 
   dashboard:
     build: ./dashboard
