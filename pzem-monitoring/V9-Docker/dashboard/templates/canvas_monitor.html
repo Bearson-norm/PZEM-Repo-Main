@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=5">
+    <meta name="theme-color" content="#2980b9">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="format-detection" content="telephone=no">
+    <title>MQTT Tunnel &amp; Canvas — PZEM</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #eef4f7;
+            --surface: #ffffff;
+            --text: #2c3e50;
+            --muted: #7f8c8d;
+            --primary: #2980b9;
+            --primary-dark: #1f6a9a;
+            --accent: #16a085;
+            --border: #e4eaef;
+            --radius: 14px;
+            --touch: 48px;
+            --safe-b: env(safe-area-inset-bottom, 0px);
+            --safe-t: env(safe-area-inset-top, 0px);
+            --nav-h: 64px;
+            --header-compact: 56px;
+        }
+
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+        html {
+            -webkit-text-size-adjust: 100%;
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: var(--bg);
+            min-height: 100vh;
+            min-height: 100dvh;
+            color: var(--text);
+            padding-bottom: calc(var(--nav-h) + var(--safe-b) + 12px);
+            -webkit-tap-highlight-color: transparent;
+            overscroll-behavior-y: contain;
+        }
+
+        .app-header {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: rgba(255,255,255,0.94);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border);
+            padding: calc(10px + var(--safe-t)) 16px 10px;
+        }
+        .app-header-inner {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .brand { flex: 1; min-width: 0; }
+        .brand h1 {
+            font-size: 1.05rem;
+            font-weight: 700;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .brand p { display: none; }
+        .header-links {
+            display: flex;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+        .header-links a {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: var(--touch);
+            height: var(--touch);
+            border-radius: 12px;
+            color: var(--primary);
+            background: #ebf5fb;
+            text-decoration: none;
+            font-size: 1.1rem;
+        }
+        .header-links a.active { background: var(--primary); color: #fff; }
+
+        .wrap {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 12px 12px 8px;
+        }
+
+        /* Desktop tabs (hidden on mobile) */
+        .tabs-desktop {
+            display: none;
+            gap: 8px;
+            margin-bottom: 14px;
+            flex-wrap: wrap;
+        }
+        .tab-btn {
+            border: none;
+            min-height: var(--touch);
+            padding: 10px 18px;
+            border-radius: 12px;
+            cursor: pointer;
+            background: var(--surface);
+            color: var(--muted);
+            font-weight: 600;
+            font-size: 0.9rem;
+            touch-action: manipulation;
+        }
+        .tab-btn.active { background: var(--text); color: #fff; }
+
+        /* Bottom nav (mobile) */
+        .bottom-nav {
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 200;
+            display: flex;
+            background: rgba(255,255,255,0.97);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            border-top: 1px solid var(--border);
+            padding-bottom: var(--safe-b);
+            box-shadow: 0 -4px 24px rgba(0,0,0,0.06);
+        }
+        .bottom-nav button {
+            flex: 1;
+            border: none;
+            background: transparent;
+            min-height: var(--nav-h);
+            padding: 6px 4px 8px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 3px;
+            color: var(--muted);
+            font-size: 0.65rem;
+            font-weight: 600;
+            cursor: pointer;
+            touch-action: manipulation;
+        }
+        .bottom-nav button i { font-size: 1.15rem; }
+        .bottom-nav button.active { color: var(--primary); }
+
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; animation: fadeIn 0.2s ease; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+        @media (prefers-reduced-motion: reduce) {
+            .tab-panel.active { animation: none; }
+        }
+
+        .card {
+            background: var(--surface);
+            border-radius: var(--radius);
+            padding: 16px;
+            margin-bottom: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.04);
+            border: 1px solid var(--border);
+        }
+        .card h2 {
+            font-size: 1rem;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .card h2 i { color: var(--accent); }
+        .card-desc {
+            font-size: 0.85rem;
+            color: var(--muted);
+            line-height: 1.45;
+            margin-bottom: 12px;
+        }
+
+        .field { margin-bottom: 12px; }
+        .field label {
+            display: block;
+            font-size: 0.78rem;
+            color: var(--muted);
+            margin-bottom: 6px;
+            font-weight: 600;
+        }
+        .field-row { display: flex; gap: 10px; flex-wrap: wrap; }
+        .field-row .field { flex: 1; min-width: 120px; }
+
+        select, input[type="text"], input[type="password"], input[type="number"], textarea {
+            width: 100%;
+            min-height: var(--touch);
+            padding: 12px 14px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            font-size: 16px;
+            background: #fafbfc;
+            color: var(--text);
+            -webkit-appearance: none;
+            appearance: none;
+        }
+        textarea { min-height: 100px; font-family: ui-monospace, monospace; font-size: 14px; resize: vertical; }
+        select {
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%237f8c8d' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 14px center;
+            padding-right: 36px;
+        }
+
+        .toolbar {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+        .toolbar .field { margin-bottom: 0; }
+
+        .btn-row { display: flex; flex-wrap: wrap; gap: 10px; }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            min-height: var(--touch);
+            padding: 0 20px;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            background: linear-gradient(135deg, var(--primary), #3498db);
+            color: #fff;
+            font-weight: 600;
+            font-size: 0.95rem;
+            touch-action: manipulation;
+            flex: 1;
+            min-width: 140px;
+        }
+        .btn.secondary { background: #ecf0f1; color: var(--text); flex: 0 1 auto; min-width: auto; }
+        .btn:active { transform: scale(0.98); opacity: 0.95; }
+        .btn-block { width: 100%; flex: 1 1 100%; }
+
+        .fab-refresh {
+            position: fixed;
+            right: 16px;
+            bottom: calc(var(--nav-h) + var(--safe-b) + 16px);
+            z-index: 150;
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            border: none;
+            background: linear-gradient(135deg, var(--primary), #3498db);
+            color: #fff;
+            font-size: 1.2rem;
+            box-shadow: 0 6px 20px rgba(41,128,185,0.4);
+            cursor: pointer;
+            touch-action: manipulation;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 0.72rem;
+            font-weight: 700;
+        }
+        .badge.on { background: #d5f4e6; color: #1e8449; }
+        .badge.off { background: #fadbd8; color: #922b21; }
+
+        .warn-box {
+            background: #fef9e7;
+            border: 1px solid #f9e79f;
+            color: #7d6608;
+            padding: 12px 14px;
+            border-radius: 12px;
+            margin-bottom: 12px;
+            font-size: 0.88rem;
+            line-height: 1.4;
+        }
+
+        .canvas-title { font-size: 1.2rem; font-weight: 700; line-height: 1.3; word-break: break-word; }
+        .canvas-meta { font-size: 0.82rem; color: var(--muted); margin: 6px 0 12px; line-height: 1.4; }
+        .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+        .chip {
+            background: #ebf5fb;
+            color: #1f618d;
+            padding: 6px 10px;
+            border-radius: 8px;
+            font-size: 0.78rem;
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+        .metric {
+            background: #f8f9fa;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 12px 10px;
+            text-align: center;
+        }
+        .metric .val { font-size: 1.15rem; font-weight: 700; color: var(--accent); }
+        .metric .unit { font-size: 0.7rem; color: #95a5a6; }
+        .metric .lbl { font-size: 0.72rem; color: var(--muted); margin-top: 4px; line-height: 1.2; }
+
+        .phase-grid { display: flex; flex-direction: column; gap: 10px; }
+        .phase-card {
+            border-radius: 12px;
+            padding: 14px;
+            border-left: 4px solid #3498db;
+            background: #fafbfc;
+        }
+        .phase-card.r { border-left-color: #e74c3c; }
+        .phase-card.s { border-left-color: #f39c12; }
+        .phase-card.t { border-left-color: #27ae60; }
+        .phase-card h4 { font-size: 0.92rem; margin-bottom: 8px; word-break: break-word; }
+        .phase-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            font-size: 0.85rem;
+            padding: 5px 0;
+            color: #566573;
+        }
+        .phase-row strong { color: var(--text); text-align: right; flex-shrink: 0; }
+
+        .compare-grid { display: flex; flex-direction: column; gap: 14px; }
+        .compare-side {
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 14px;
+            background: #fafbfc;
+        }
+        .compare-side h3 { margin-bottom: 10px; font-size: 0.95rem; }
+
+        .empty {
+            text-align: center;
+            padding: 32px 16px;
+            color: #95a5a6;
+            font-size: 0.9rem;
+        }
+        .mono { font-family: ui-monospace, monospace; font-size: 0.75rem; color: #566573; word-break: break-all; }
+
+        /* List cards (mobile-first) */
+        .list-cards { display: flex; flex-direction: column; gap: 10px; }
+        .list-card {
+            background: #fafbfc;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 14px;
+        }
+        .list-card-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        .list-card-head strong { font-size: 0.95rem; word-break: break-word; }
+        .list-card-meta {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px 12px;
+            font-size: 0.8rem;
+            color: var(--muted);
+        }
+        .list-card-meta span { display: block; }
+        .list-card-meta b { color: var(--text); font-weight: 600; }
+        .list-card-actions { margin-top: 12px; }
+        .list-card-actions .btn { min-height: 44px; width: 100%; }
+
+        /* Desktop table */
+        .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -4px; padding: 0 4px; }
+        table.data { width: 100%; border-collapse: collapse; font-size: 0.82rem; min-width: 640px; }
+        table.data th, table.data td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #ecf0f1; }
+        table.data th { background: #f8f9fb; white-space: nowrap; }
+        .only-desktop { display: none; }
+        .only-mobile { display: block; }
+
+        .chart-section {
+            margin-top: 18px;
+            padding-top: 16px;
+            border-top: 1px solid var(--border);
+        }
+        .chart-section h3 { font-size: 0.95rem; margin-bottom: 12px; }
+        .chart-filters {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+        .chart-options {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+        label.chk {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 0.9rem;
+            min-height: var(--touch);
+            padding: 4px 0;
+            cursor: pointer;
+        }
+        label.chk input {
+            width: 22px;
+            height: 22px;
+            min-height: 22px;
+            flex-shrink: 0;
+            accent-color: var(--primary);
+        }
+        .chart-box {
+            background: #fafbfc;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 12px;
+            margin-bottom: 12px;
+        }
+        .chart-box h4 { font-size: 0.88rem; margin-bottom: 8px; color: #566573; }
+        .chart-wrap { position: relative; height: 240px; }
+        .chart-wrap.tall { height: 260px; }
+
+        .status-line { font-size: 0.78rem; color: var(--muted); margin-top: 10px; line-height: 1.4; }
+        .config-grid { display: flex; flex-direction: column; gap: 0; }
+
+        label.inline-chk {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-height: var(--touch);
+            font-size: 0.9rem;
+            cursor: pointer;
+        }
+        label.inline-chk input { width: 20px; height: 20px; min-height: 20px; accent-color: var(--primary); }
+
+        /* Tablet+ */
+        @media (min-width: 600px) {
+            .metrics { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
+            .chart-filters { grid-template-columns: repeat(4, 1fr); }
+            .chart-wrap { height: 280px; }
+            .chart-wrap.tall { height: 300px; }
+            .fab-refresh { display: none; }
+        }
+
+        @media (min-width: 768px) {
+            body { padding-bottom: 24px; }
+            .bottom-nav { display: none; }
+            .fab-refresh { display: none; }
+            .tabs-desktop { display: flex; }
+            .only-desktop { display: block; }
+            .only-mobile { display: none; }
+            .brand p {
+                display: block;
+                font-size: 0.85rem;
+                color: var(--muted);
+                margin-top: 4px;
+                line-height: 1.4;
+            }
+            .brand h1 { font-size: 1.4rem; white-space: normal; }
+            .app-header { padding: 16px 20px; }
+            .wrap { padding: 16px 20px; }
+            .toolbar { flex-direction: row; align-items: flex-end; }
+            .toolbar .field { flex: 1; min-width: 200px; }
+            .btn { flex: 0 0 auto; min-width: auto; }
+            .phase-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+            .compare-grid { display: grid; grid-template-columns: 1fr 1fr; }
+            .config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+            .chart-options { flex-direction: row; flex-wrap: wrap; gap: 16px; }
+        }
+
+        @media (min-width: 1024px) {
+            .header-links a { width: auto; height: auto; padding: 10px 16px; font-size: 0.88rem; gap: 8px; }
+            .header-links a span { display: inline; }
+        }
+        @media (max-width: 1023px) {
+            .header-links a span { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <header class="app-header">
+        <div class="app-header-inner">
+            <div class="brand">
+                <h1><i class="fas fa-plug"></i> Tunnel &amp; Canvas</h1>
+                <p>Monitoring MQTT dan panel canvas — kompatibel ponsel &amp; desktop</p>
+            </div>
+            <nav class="header-links" aria-label="Navigasi utama">
+                <a href="/" title="Dashboard"><i class="fas fa-home"></i><span> Utama</span></a>
+                <a href="/reports" title="Laporan"><i class="fas fa-file-pdf"></i><span> Laporan</span></a>
+                <a href="/canvas" class="active" title="Canvas"><i class="fas fa-layer-group"></i><span> Canvas</span></a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="wrap">
+        <div class="tabs-desktop" role="tablist" aria-label="Bagian">
+            <button type="button" class="tab-btn active" data-tab="view" role="tab">Tampilan</button>
+            <button type="button" class="tab-btn" data-tab="tunnels" role="tab">Tunnel</button>
+            <button type="button" class="tab-btn" data-tab="definitions" role="tab">Definisi</button>
+            <button type="button" class="tab-btn" data-tab="config" role="tab">Konfigurasi</button>
+        </div>
+
+        <section id="tab-view" class="tab-panel active" role="tabpanel">
+            <div class="card">
+                <h2><i class="fas fa-tv"></i> Panel canvas</h2>
+                <div class="toolbar">
+                    <div class="field">
+                        <label for="canvasSelect">Pilih canvas</label>
+                        <select id="canvasSelect" aria-label="Pilih canvas"></select>
+                    </div>
+                    <button type="button" class="btn only-desktop" onclick="refreshAll()"><i class="fas fa-sync-alt"></i> Segarkan</button>
+                </div>
+                <div id="canvasWarnings"></div>
+                <div id="canvasView">
+                    <div class="empty"><i class="fas fa-hand-pointer"></i><br>Pilih canvas untuk menampilkan data</div>
+                </div>
+                <div class="chart-section" id="chartSection" style="display:none;">
+                    <h3><i class="fas fa-chart-line"></i> Grafik</h3>
+                    <div class="chart-filters">
+                        <div class="field">
+                            <label for="chartPeriod">Periode</label>
+                            <select id="chartPeriod" onchange="loadCanvasCharts()">
+                                <option value="hour">1 Jam</option>
+                                <option value="day">1 Hari</option>
+                                <option value="week">1 Minggu</option>
+                                <option value="month">1 Bulan</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="chartMetric">Metrik</label>
+                            <select id="chartMetric" onchange="loadCanvasCharts()">
+                                <option value="power">Daya (W)</option>
+                                <option value="voltage">Tegangan (V)</option>
+                                <option value="current">Arus (A)</option>
+                                <option value="energy">Energi (kWh)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="chart-options">
+                        <label class="chk"><input type="checkbox" id="showPerPhase" checked onchange="loadCanvasCharts()" /> Per fasa / perangkat</label>
+                        <label class="chk"><input type="checkbox" id="showTotal" checked onchange="renderChartsFromCache()" /> Total daya</label>
+                    </div>
+                    <div id="chartContainers"></div>
+                </div>
+                <p class="status-line" id="pollStatus"></p>
+            </div>
+        </section>
+
+        <section id="tab-tunnels" class="tab-panel" role="tabpanel">
+            <div class="card">
+                <h2><i class="fas fa-network-wired"></i> Tunnel MQTT</h2>
+                <p class="card-desc">Satu tunnel = satu broker + topik. Status <strong>Aktif</strong> akan subscribe otomatis.</p>
+                <button type="button" class="btn secondary btn-block" onclick="loadTunnels()"><i class="fas fa-sync-alt"></i> Segarkan</button>
+                <div id="tunnelCards" class="list-cards only-mobile" style="margin-top:12px;"></div>
+                <div class="table-scroll only-desktop" style="margin-top:12px;">
+                    <table class="data" id="tunnelTable">
+                        <thead>
+                            <tr><th>Nama</th><th>Broker</th><th>Port</th><th>Status</th><th>Topik</th><th>Error</th></tr>
+                        </thead>
+                        <tbody id="tunnelBody"></tbody>
+                    </table>
+                </div>
+                <p id="tunnelEmpty" class="empty" style="display:none;">Belum ada tunnel.</p>
+            </div>
+        </section>
+
+        <section id="tab-definitions" class="tab-panel" role="tabpanel">
+            <div class="card">
+                <h2><i class="fas fa-list"></i> Definisi canvas</h2>
+                <div id="canvasDefCards" class="list-cards only-mobile"></div>
+                <div id="canvasDefList" class="only-desktop"></div>
+            </div>
+        </section>
+
+        <section id="tab-config" class="tab-panel" role="tabpanel">
+            <div class="config-grid">
+                <div class="card">
+                    <h2><i class="fas fa-plus-circle"></i> Tunnel baru</h2>
+                    <input type="hidden" id="bridgeEditId" />
+                    <div class="field"><label for="bridgeName">Nama (unik)</label><input type="text" id="bridgeName" placeholder="Gedung-A-R" autocomplete="off" /></div>
+                    <div class="field"><label for="bridgeHost">Broker host</label><input type="text" id="bridgeHost" placeholder="103.87.67.139" inputmode="url" autocomplete="off" /></div>
+                    <div class="field-row">
+                        <div class="field"><label for="bridgePort">Port</label><input type="number" id="bridgePort" value="1883" inputmode="numeric" /></div>
+                        <div class="field"><label for="bridgeQos">QoS</label><input type="number" id="bridgeQos" value="1" min="0" max="2" inputmode="numeric" /></div>
+                    </div>
+                    <div class="field"><label for="bridgeTopics">Topik (JSON)</label><textarea id="bridgeTopics">["energy/3phase/+/phase/+/data"]</textarea></div>
+                    <div class="field"><label for="bridgeUser">Username</label><input type="text" id="bridgeUser" autocomplete="username" /></div>
+                    <div class="field"><label for="bridgePass">Password</label><input type="password" id="bridgePass" placeholder="Kosong = tidak diubah" autocomplete="new-password" /></div>
+                    <label class="inline-chk"><input type="checkbox" id="bridgeTls" /> TLS</label>
+                    <label class="inline-chk"><input type="checkbox" id="bridgeEnabled" checked /> Aktif</label>
+                    <div class="btn-row" style="margin-top:14px;">
+                        <button type="button" class="btn" onclick="saveBridge()">Simpan</button>
+                        <button type="button" class="btn secondary" onclick="resetBridgeForm()">Baru</button>
+                    </div>
+                </div>
+                <div class="card">
+                    <h2><i class="fas fa-palette"></i> Canvas baru</h2>
+                    <div class="field"><label for="canvasName">Nama</label><input type="text" id="canvasName" placeholder="Panel CKPG1" /></div>
+                    <div class="field">
+                        <label for="canvasType">Tipe</label>
+                        <select id="canvasType" onchange="onCanvasTypeChange()">
+                            <option value="single_phase">1 fasa</option>
+                            <option value="three_phase_building">3 fasa R/S/T</option>
+                            <option value="compare_buildings">Banding A vs B</option>
+                        </select>
+                    </div>
+                    <div id="pickSingle" class="field"><label for="tunnel1ph">Tunnel</label><select class="tunnel-sel" id="tunnel1ph"></select></div>
+                    <div id="pickThree" style="display:none">
+                        <div class="field"><label for="tunnel3r">Fasa R</label><select class="tunnel-sel" id="tunnel3r"></select></div>
+                        <div class="field"><label for="tunnel3s">Fasa S</label><select class="tunnel-sel" id="tunnel3s"></select></div>
+                        <div class="field"><label for="tunnel3t">Fasa T</label><select class="tunnel-sel" id="tunnel3t"></select></div>
+                    </div>
+                    <div id="pickCompare" style="display:none">
+                        <p class="card-desc" style="margin-bottom:8px;"><strong>Sisi A</strong></p>
+                        <div class="field"><label for="cmpAR">R</label><select class="tunnel-sel" id="cmpAR"></select></div>
+                        <div class="field"><label for="cmpAS">S</label><select class="tunnel-sel" id="cmpAS"></select></div>
+                        <div class="field"><label for="cmpAT">T</label><select class="tunnel-sel" id="cmpAT"></select></div>
+                        <p class="card-desc" style="margin:12px 0 8px;"><strong>Sisi B</strong></p>
+                        <div class="field"><label for="cmpBR">R</label><select class="tunnel-sel" id="cmpBR"></select></div>
+                        <div class="field"><label for="cmpBS">S</label><select class="tunnel-sel" id="cmpBS"></select></div>
+                        <div class="field"><label for="cmpBT">T</label><select class="tunnel-sel" id="cmpBT"></select></div>
+                    </div>
+                    <div class="field"><label for="canvasPollSec">Polling (detik)</label><input type="number" id="canvasPollSec" value="300" min="60" max="3600" inputmode="numeric" /></div>
+                    <button type="button" class="btn btn-block" onclick="saveCanvas()">Simpan canvas</button>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <button type="button" class="fab-refresh only-mobile" onclick="refreshAll()" aria-label="Segarkan data" title="Segarkan">
+        <i class="fas fa-sync-alt"></i>
+    </button>
+
+    <nav class="bottom-nav" aria-label="Menu bagian">
+        <button type="button" class="active" data-tab="view" aria-current="page"><i class="fas fa-tv"></i><span>Tampilan</span></button>
+        <button type="button" data-tab="tunnels"><i class="fas fa-network-wired"></i><span>Tunnel</span></button>
+        <button type="button" data-tab="definitions"><i class="fas fa-list"></i><span>Definisi</span></button>
+        <button type="button" data-tab="config"><i class="fas fa-cog"></i><span>Atur</span></button>
+    </nav>
+
+    <script>
+        const TYPE_LABELS = { single_phase: '1 Fasa', three_phase_building: '3 Fasa', compare_buildings: 'Banding A/B' };
+        const PHASE_COLORS = { R: '#e74c3c', S: '#f39c12', T: '#27ae60', '1': '#e74c3c', '2': '#f39c12', '3': '#27ae60' };
+        const METRIC_UNITS = { power: 'W', voltage: 'V', current: 'A', energy: 'kWh' };
+        let canvasList = [], pollTimer = null, currentPollSec = 300, chartInstances = [], chartDataCache = null;
+
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-btn, .bottom-nav button').forEach(b => {
+                const on = b.dataset.tab === tabId;
+                b.classList.toggle('active', on);
+                if (on && b.setAttribute) b.setAttribute('aria-current', 'page');
+                else if (b.removeAttribute) b.removeAttribute('aria-current');
+            });
+            document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+            const panel = document.getElementById('tab-' + tabId);
+            if (panel) panel.classList.add('active');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+        document.querySelectorAll('.tab-btn, .bottom-nav button').forEach(btn => {
+            btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+        });
+
+        function esc(s) { if (s == null) return ''; const d = document.createElement('div'); d.textContent = String(s); return d.innerHTML; }
+        function fmtNum(v, dec = 2) {
+            if (v == null || v === '' || Number.isNaN(Number(v))) return '—';
+            return Number(v).toLocaleString('id-ID', { maximumFractionDigits: dec });
+        }
+        function topicsPreview(topics) {
+            if (!Array.isArray(topics) || !topics.length) return '—';
+            const t = topics.map(String);
+            return t.length <= 2 ? t.join(', ') : t.slice(0, 2).join(', ') + ` (+${t.length - 2})`;
+        }
+        function isMobile() { return window.matchMedia('(max-width: 767px)').matches; }
+
+        function metricCard(label, value, unit) {
+            return `<div class="metric"><div class="val">${esc(value)}</div><div class="unit">${esc(unit)}</div><div class="lbl">${esc(label)}</div></div>`;
+        }
+        function renderAggregates(agg, threePhase) {
+            if (!agg) return '';
+            if (threePhase) {
+                return `<div class="metrics">${metricCard('Daya aktif', fmtNum(agg.total_active_power_w), 'W')}${metricCard('Daya semu', fmtNum(agg.total_apparent_power_va), 'VA')}${metricCard('Reaktif', fmtNum(agg.total_reactive_power_kvar, 4), 'kVAR')}${metricCard('PF', fmtNum(agg.system_power_factor, 4), '')}${metricCard('Energi', fmtNum(agg.total_energy_kwh, 3), 'kWh')}</div>`;
+            }
+            return `<div class="metrics">${metricCard('Daya aktif', fmtNum(agg.active_power_w), 'W')}${metricCard('Daya semu', fmtNum(agg.apparent_power_va), 'VA')}${metricCard('Reaktif', fmtNum(agg.reactive_power_kvar, 4), 'kVAR')}${metricCard('PF', fmtNum(agg.power_factor, 4), '')}${metricCard('Energi', fmtNum(agg.energy_kwh, 3), 'kWh')}</div>`;
+        }
+        function phaseClass(phase) {
+            const p = (phase || '').toUpperCase();
+            if (p === 'R' || p === '1') return 'r';
+            if (p === 'S' || p === '2') return 's';
+            if (p === 'T' || p === '3') return 't';
+            return '';
+        }
+        function renderSourceCards(sources) {
+            if (!sources || !sources.length) return '<p class="empty">Tidak ada sumber data.</p>';
+            return `<div class="phase-grid">${sources.map(s => {
+                const ph = s.phase || '?', cls = phaseClass(ph);
+                return `<article class="phase-card ${cls}"><h4>Fasa ${esc(ph)}</h4><div class="phase-row"><span>Device</span><strong>${esc(s.device_name || s.device_address)}</strong></div><div class="phase-row"><span>Tunnel</span><strong>${esc(s.bridge_name || '—')}</strong></div><div class="phase-row"><span>V / I / P</span><strong>${fmtNum(s.voltage)}V · ${fmtNum(s.current)}A · ${fmtNum(s.power)}W</strong></div><div class="phase-row"><span>PF / Energi</span><strong>${fmtNum(s.power_factor, 4)} · ${fmtNum(s.energy, 3)} kWh</strong></div></article>`;
+            }).join('')}</div>`;
+        }
+        function renderCompareSide(side, label) {
+            const agg = side.aggregates || {}, three = Object.keys(agg).some(k => k.startsWith('total_'));
+            return `<div class="compare-side"><h3>${esc(label)}</h3><div class="chips">${(side.tunnel_names || []).map(n => `<span class="chip">${esc(n)}</span>`).join('') || '—'}</div>${renderAggregates(agg, three)}${renderSourceCards(side.sources)}</div>`;
+        }
+        function renderSnapshot(snap) {
+            const el = document.getElementById('canvasView'), warnEl = document.getElementById('canvasWarnings');
+            if (snap.error) { el.innerHTML = `<div class="empty">${esc(snap.error)}</div>`; warnEl.innerHTML = ''; return; }
+            warnEl.innerHTML = (snap.warnings || []).length ? `<div class="warn-box"><i class="fas fa-exclamation-triangle"></i> ${snap.warnings.map(esc).join(' · ')}</div>` : '';
+            const title = (snap.display && snap.display.title) || snap.canvas_name || 'Canvas';
+            let body = '';
+            if (snap.type === 'compare_buildings' && snap.compare) {
+                body = `<div class="compare-grid">${renderCompareSide(snap.compare.a, snap.compare.a.label || 'Sisi A')}${renderCompareSide(snap.compare.b, snap.compare.b.label || 'Sisi B')}</div>`;
+            } else {
+                const three = snap.type === 'three_phase_building' || (snap.sources && snap.sources.length > 1);
+                body = renderAggregates(snap.aggregates, three) + renderSourceCards(snap.sources);
+            }
+            const tunnels = snap.tunnel_names || [];
+            el.innerHTML = `<div class="canvas-title">${esc(title)}</div><div class="canvas-meta">${esc(TYPE_LABELS[snap.type] || snap.type)} · #${esc(snap.canvas_id)} · ${esc(snap.as_of || '')}</div><div class="chips">${tunnels.map(n => `<span class="chip">${esc(n)}</span>`).join('')}</div>${body}`;
+        }
+
+        function destroyCharts() { chartInstances.forEach(ch => { try { ch.destroy(); } catch (_) {} }); chartInstances = []; }
+        function formatChartLabel(iso) {
+            try { const d = new Date(iso); return isNaN(d.getTime()) ? iso : d.toLocaleString('id-ID', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+            catch (_) { return iso; }
+        }
+        function colorForSeries(s, idx) { const ph = (s.phase || '').toUpperCase(); return PHASE_COLORS[ph] || ['#3498db','#9b59b6','#1abc9c','#e67e22'][idx % 4]; }
+        function chartFontSize() { return isMobile() ? 10 : 11; }
+
+        function buildChartDatasets(group, metric) {
+            const datasets = [], showPhase = document.getElementById('showPerPhase').checked;
+            const showTotal = document.getElementById('showTotal').checked && metric === 'power';
+            let labels = [];
+            if (showPhase && group.series) {
+                group.series.forEach((s, i) => {
+                    const pts = s.points || []; if (!pts.length) return;
+                    if (!labels.length) labels = pts.map(p => formatChartLabel(p.time_period));
+                    datasets.push({ label: s.label, data: pts.map(p => p.value), borderColor: colorForSeries(s, i), backgroundColor: colorForSeries(s, i) + '22', tension: 0.25, pointRadius: pts.length > 60 ? 0 : (isMobile() ? 0 : 2), borderWidth: 2 });
+                });
+            }
+            if (showTotal && group.total && group.total.length) {
+                if (!labels.length) labels = group.total.map(p => formatChartLabel(p.time_period));
+                datasets.push({ label: 'Total', data: group.total.map(p => p.value), borderColor: '#2c3e50', borderWidth: 3, tension: 0.25, pointRadius: 0 });
+            }
+            return { labels, datasets };
+        }
+
+        function renderChartsFromCache() {
+            if (!chartDataCache) return;
+            const container = document.getElementById('chartContainers'); destroyCharts();
+            const metric = chartDataCache.metric || 'power', unit = METRIC_UNITS[metric] || '', groups = chartDataCache.groups || [];
+            if (!groups.length) { container.innerHTML = '<p class="empty">Tidak ada data grafik.</p>'; return; }
+            container.innerHTML = groups.map((g, i) => `<div class="chart-box"><h4>${esc(g.label)}</h4><div class="chart-wrap ${groups.length === 1 ? 'tall' : ''}"><canvas id="canvasChart${i}"></canvas></div></div>`).join('');
+            const fs = chartFontSize();
+            groups.forEach((g, i) => {
+                const ctx = document.getElementById('canvasChart' + i); if (!ctx) return;
+                const { labels, datasets } = buildChartDatasets(g, metric); if (!datasets.length) return;
+                chartInstances.push(new Chart(ctx, {
+                    type: 'line', data: { labels, datasets },
+                    options: {
+                        responsive: true, maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        plugins: {
+                            legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: fs }, padding: isMobile() ? 8 : 12 } },
+                            tooltip: { titleFont: { size: fs + 1 }, bodyFont: { size: fs }, callbacks: { label: c => `${c.dataset.label}: ${fmtNum(c.parsed.y)} ${unit}` } }
+                        },
+                        scales: {
+                            x: { ticks: { maxRotation: 45, minRotation: isMobile() ? 45 : 0, font: { size: fs }, maxTicksLimit: isMobile() ? 6 : 12 } },
+                            y: { beginAtZero: metric === 'power', ticks: { font: { size: fs } }, title: { display: !isMobile(), text: unit } }
+                        }
+                    }
+                }));
+            });
+        }
+
+        async function loadCanvasCharts() {
+            const id = document.getElementById('canvasSelect').value, section = document.getElementById('chartSection');
+            if (!id) { section.style.display = 'none'; chartDataCache = null; destroyCharts(); return; }
+            section.style.display = 'block';
+            const container = document.getElementById('chartContainers');
+            container.innerHTML = '<p class="empty"><i class="fas fa-spinner fa-spin"></i> Memuat…</p>';
+            destroyCharts();
+            try {
+                const period = document.getElementById('chartPeriod').value, metric = document.getElementById('chartMetric').value;
+                const r = await fetch(`/api/canvas/${encodeURIComponent(id)}/chart?period=${encodeURIComponent(period)}&metric=${encodeURIComponent(metric)}`);
+                const j = await r.json();
+                if (!r.ok) { container.innerHTML = `<p class="empty">${esc(j.error || r.statusText)}</p>`; return; }
+                chartDataCache = j; renderChartsFromCache();
+            } catch (e) { container.innerHTML = `<p class="empty">${esc(String(e))}</p>`; }
+        }
+
+        async function refreshSnapshot() {
+            const id = document.getElementById('canvasSelect').value, el = document.getElementById('canvasView');
+            if (!id) {
+                el.innerHTML = '<div class="empty">Pilih canvas</div>';
+                document.getElementById('canvasWarnings').innerHTML = '';
+                document.getElementById('pollStatus').textContent = '';
+                document.getElementById('chartSection').style.display = 'none';
+                chartDataCache = null; destroyCharts(); return;
+            }
+            el.innerHTML = '<div class="empty"><i class="fas fa-spinner fa-spin"></i></div>';
+            try {
+                const r = await fetch('/api/canvas/' + encodeURIComponent(id) + '/snapshot');
+                const j = await r.json();
+                if (!r.ok) { renderSnapshot({ error: j.error || r.statusText }); return; }
+                renderSnapshot(j);
+                document.getElementById('pollStatus').textContent = `Update otomatis ${currentPollSec}s · ${new Date().toLocaleTimeString('id-ID')}`;
+            } catch (e) { renderSnapshot({ error: String(e) }); }
+        }
+        async function refreshAll() { await refreshSnapshot(); await loadCanvasCharts(); }
+        function setupPolling() {
+            if (pollTimer) clearInterval(pollTimer);
+            const id = document.getElementById('canvasSelect').value;
+            if (!id) return;
+            pollTimer = setInterval(refreshAll, Math.min(Math.max(currentPollSec * 1000, 60000), 600000));
+        }
+        function onCanvasSelectChange() {
+            const c = canvasList.find(x => String(x.id) === document.getElementById('canvasSelect').value);
+            currentPollSec = c ? (parseInt(c.poll_interval_seconds, 10) || 300) : 300;
+            refreshAll(); setupPolling();
+        }
+
+        function renderTunnelCards(list) {
+            const el = document.getElementById('tunnelCards');
+            if (!list.length) { el.innerHTML = ''; return; }
+            el.innerHTML = list.map(b => {
+                const en = !!b.enabled;
+                return `<article class="list-card"><div class="list-card-head"><strong>${esc(b.name)}</strong><span class="badge ${en ? 'on' : 'off'}">${en ? 'Aktif' : 'Mati'}</span></div><div class="list-card-meta"><span>Broker <b>${esc(b.broker_host)}:${esc(b.broker_port)}</b></span><span>QoS <b>${esc(b.qos != null ? b.qos : 1)}</b></span><span>TLS <b>${b.use_tls ? 'Ya' : 'Tidak'}</b></span><span>Topik <b>${esc(topicsPreview(b.topics))}</b></span></div>${b.last_connect_error ? `<p class="mono" style="color:#c0392b;margin-top:8px">${esc(b.last_connect_error)}</p>` : ''}</article>`;
+            }).join('');
+        }
+        function renderTunnelTable(list) {
+            const tbody = document.getElementById('tunnelBody'), empty = document.getElementById('tunnelEmpty'), table = document.getElementById('tunnelTable');
+            tbody.innerHTML = '';
+            if (!list.length) { empty.style.display = 'block'; table.style.display = 'none'; return; }
+            empty.style.display = 'none'; table.style.display = '';
+            list.forEach(b => {
+                const en = !!b.enabled, tr = document.createElement('tr');
+                tr.innerHTML = `<td><strong>${esc(b.name)}</strong></td><td>${esc(b.broker_host)}</td><td>${esc(b.broker_port)}</td><td><span class="badge ${en ? 'on' : 'off'}">${en ? 'Aktif' : 'Mati'}</span></td><td class="mono">${esc(topicsPreview(b.topics))}</td><td style="color:#c0392b;font-size:0.78rem">${esc(b.last_connect_error || '—')}</td>`;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function renderCanvasDefCards() {
+            const el = document.getElementById('canvasDefCards');
+            if (!canvasList.length) { el.innerHTML = '<p class="empty">Belum ada canvas.</p>'; return; }
+            el.innerHTML = canvasList.map(c => canvasDefCardHtml(c)).join('');
+        }
+        function canvasDefCardHtml(c) {
+            const cfg = typeof c.config === 'string' ? (() => { try { return JSON.parse(c.config); } catch { return {}; } })() : (c.config || {});
+            let tunnels = cfg.tunnel_names || [];
+            if (cfg.compare) tunnels = [...((cfg.compare.a && cfg.compare.a.tunnel_names) || []), ...((cfg.compare.b && cfg.compare.b.tunnel_names) || [])];
+            const en = c.enabled !== false;
+            return `<article class="list-card"><div class="list-card-head"><strong>${esc(c.name)}</strong><span class="badge ${en ? 'on' : 'off'}">${en ? 'Aktif' : 'Nonaktif'}</span></div><div class="list-card-meta"><span>ID <b>${c.id}</b></span><span>Tipe <b>${esc(TYPE_LABELS[c.type] || c.type)}</b></span><span>Poll <b>${esc(c.poll_interval_seconds || 300)}s</b></span><span>Tunnel <b>${esc(tunnels.join(', ') || '—')}</b></span></div><div class="list-card-actions"><button type="button" class="btn" onclick="viewCanvas(${c.id})">Buka tampilan</button></div></article>`;
+        }
+        function renderCanvasDefList() {
+            const el = document.getElementById('canvasDefList');
+            if (!canvasList.length) { el.innerHTML = '<p class="empty">Belum ada canvas.</p>'; return; }
+            el.innerHTML = `<div class="table-scroll"><table class="data"><thead><tr><th>ID</th><th>Nama</th><th>Tipe</th><th>Tunnel</th><th>Poll</th><th></th></tr></thead><tbody>${canvasList.map(c => {
+                const cfg = typeof c.config === 'string' ? (() => { try { return JSON.parse(c.config); } catch { return {}; } })() : (c.config || {});
+                let tunnels = cfg.tunnel_names || [];
+                if (cfg.compare) tunnels = [...((cfg.compare.a && cfg.compare.a.tunnel_names) || []), ...((cfg.compare.b && cfg.compare.b.tunnel_names) || [])];
+                return `<tr><td>${c.id}</td><td><strong>${esc(c.name)}</strong></td><td>${esc(TYPE_LABELS[c.type] || c.type)}</td><td class="mono">${esc(tunnels.join(', ') || '—')}</td><td>${esc(c.poll_interval_seconds || 300)}s</td><td><button type="button" class="btn secondary" onclick="viewCanvas(${c.id})">Lihat</button></td></tr>`;
+            }).join('')}</tbody></table></div>`;
+        }
+
+        async function loadCanvasList() {
+            const r = await fetch('/api/canvas-configs'), data = await r.json();
+            canvasList = Array.isArray(data) ? data : [];
+            const sel = document.getElementById('canvasSelect'), prev = sel.value;
+            sel.innerHTML = '<option value="">— pilih canvas —</option>';
+            canvasList.forEach(c => {
+                const o = document.createElement('option');
+                o.value = c.id;
+                o.textContent = `${c.name} (${TYPE_LABELS[c.type] || c.type})`;
+                sel.appendChild(o);
+            });
+            if (canvasList.some(c => String(c.id) === prev)) sel.value = prev;
+            renderCanvasDefCards(); renderCanvasDefList(); fillTunnelSelects();
+            if (sel.value) onCanvasSelectChange();
+        }
+        function viewCanvas(id) { switchTab('view'); document.getElementById('canvasSelect').value = String(id); onCanvasSelectChange(); }
+
+        async function loadTunnels() {
+            const r = await fetch('/api/mqtt-configs');
+            const data = await r.json();
+            const arr = Array.isArray(data) ? data : [];
+            renderTunnelCards(arr);
+            renderTunnelTable(arr);
+            fillTunnelSelects(arr);
+        }
+
+        function fillTunnelSelects(bridges) {
+            const names = (bridges || []).map(b => b.name).filter(Boolean);
+            document.querySelectorAll('select.tunnel-sel').forEach(sel => {
+                const keep = sel.value;
+                sel.innerHTML = '<option value="">— pilih —</option>';
+                names.forEach(n => { const o = document.createElement('option'); o.value = n; o.textContent = n; sel.appendChild(o); });
+                if (names.includes(keep)) sel.value = keep;
+            });
+        }
+        function onCanvasTypeChange() {
+            const t = document.getElementById('canvasType').value;
+            document.getElementById('pickSingle').style.display = t === 'single_phase' ? 'block' : 'none';
+            document.getElementById('pickThree').style.display = t === 'three_phase_building' ? 'block' : 'none';
+            document.getElementById('pickCompare').style.display = t === 'compare_buildings' ? 'block' : 'none';
+        }
+        function buildCanvasConfig() {
+            const t = document.getElementById('canvasType').value, title = document.getElementById('canvasName').value.trim();
+            const base = { formula_profile: 'auto', display: { title: title || 'Canvas', show_bridge_names: true } };
+            if (t === 'single_phase') { const n = document.getElementById('tunnel1ph').value; if (!n) { alert('Pilih tunnel.'); return null; } return { ...base, tunnel_names: [n] }; }
+            if (t === 'three_phase_building') { const ns = ['tunnel3r','tunnel3s','tunnel3t'].map(id => document.getElementById(id).value).filter(Boolean); if (!ns.length) { alert('Pilih tunnel R/S/T.'); return null; } return { ...base, tunnel_names: ns }; }
+            if (t === 'compare_buildings') {
+                const a = ['cmpAR','cmpAS','cmpAT'].map(id => document.getElementById(id).value).filter(Boolean);
+                const b = ['cmpBR','cmpBS','cmpBT'].map(id => document.getElementById(id).value).filter(Boolean);
+                if (!a.length || !b.length) { alert('Isi tunnel A dan B.'); return null; }
+                return { ...base, compare: { a: { tunnel_names: a, formula_profile: 'auto' }, b: { tunnel_names: b, formula_profile: 'auto' } } };
+            }
+            return base;
+        }
+        async function saveCanvas() {
+            const config = buildCanvasConfig(); if (!config) return;
+            const name = document.getElementById('canvasName').value.trim();
+            if (!name) { alert('Nama wajib.'); return; }
+            const r = await fetch('/api/canvas-configs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, type: document.getElementById('canvasType').value, config, poll_interval_seconds: parseInt(document.getElementById('canvasPollSec').value, 10) || 300, enabled: true }) });
+            const out = await r.json().catch(() => ({}));
+            if (!r.ok) { alert(out.error || r.statusText); return; }
+            alert('Canvas disimpan.'); loadCanvasList();
+        }
+        function resetBridgeForm() {
+            ['bridgeEditId','bridgeName','bridgeHost','bridgeUser','bridgePass'].forEach(id => document.getElementById(id).value = '');
+            document.getElementById('bridgePort').value = '1883'; document.getElementById('bridgeQos').value = '1';
+            document.getElementById('bridgeTopics').value = '["energy/3phase/+/phase/+/data"]';
+            document.getElementById('bridgeTls').checked = false; document.getElementById('bridgeEnabled').checked = true;
+        }
+        async function saveBridge() {
+            let topics; try { topics = JSON.parse(document.getElementById('bridgeTopics').value || '[]'); } catch (e) { alert('Topik harus JSON array.'); return; }
+            const editId = document.getElementById('bridgeEditId').value.trim(), passVal = document.getElementById('bridgePass').value;
+            const body = { name: document.getElementById('bridgeName').value.trim(), broker_host: document.getElementById('bridgeHost').value.trim(), broker_port: parseInt(document.getElementById('bridgePort').value, 10) || 1883, qos: parseInt(document.getElementById('bridgeQos').value, 10) || 1, use_tls: document.getElementById('bridgeTls').checked, username: document.getElementById('bridgeUser').value || null, topics, enabled: document.getElementById('bridgeEnabled').checked };
+            if (!body.name || !body.broker_host) { alert('Nama dan host wajib.'); return; }
+            let url = '/api/mqtt-configs', method = 'POST';
+            if (editId) { url += '/' + editId; method = 'PUT'; if (passVal) body.password = passVal; } else body.password = passVal || null;
+            const r = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            if (!r.ok) { alert((await r.json().catch(() => ({}))).error || r.statusText); return; }
+            resetBridgeForm(); loadTunnels(); loadCanvasList();
+        }
+
+        document.getElementById('canvasSelect').addEventListener('change', onCanvasSelectChange);
+        let resizeTimer;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(() => { if (chartDataCache) renderChartsFromCache(); }, 200);
+        });
+        window.addEventListener('orientationchange', () => setTimeout(() => { if (chartDataCache) renderChartsFromCache(); }, 300));
+
+        (async function init() {
+            onCanvasTypeChange();
+            await loadTunnels();
+            await loadCanvasList();
+            const cid = new URLSearchParams(location.search).get('canvas');
+            if (cid) { document.getElementById('canvasSelect').value = cid; onCanvasSelectChange(); }
+            setInterval(loadTunnels, 60000);
+        })();
+    </script>
+</body>
+</html>

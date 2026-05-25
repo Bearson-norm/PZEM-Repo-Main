@@ -1,6 +1,5 @@
 FROM python:3.11-slim
 
-# Install OS dependencies for psycopg2
 RUN apt-get update && apt-get install -y \
     build-essential \
     libpq-dev \
@@ -8,12 +7,13 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy requirements and install dependencies
-COPY requirements.txt .
+# Build context: V9-Docker (parent of mqtt/)
+COPY mqtt/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy MQTT client application
-COPY mqtt_client.py .
+COPY mqtt/mqtt_client.py /app/mqtt_client.py
+COPY shared /app/shared
 
-# Run the MQTT client
-CMD ["python", "mqtt_client.py"]
+ENV PYTHONPATH=/app
+
+CMD ["python", "/app/mqtt_client.py"]

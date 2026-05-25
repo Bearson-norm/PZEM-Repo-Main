@@ -174,7 +174,96 @@ class ThreePhaseCalculator:
         
         return calculate_pln_bill(total_energy_kwh, tariff_class=tariff_class, ppn_percent=ppn_percent)
 
+def resolve_report_period(period_type='daily', start_date=None, end_date=None):
+    """Normalisasi batas periode laporan."""
+    if not end_date:
+        end_date = datetime.now()
+    if not start_date:
+        if period_type == 'daily':
+            start_date = end_date - timedelta(days=1)
+        elif period_type == 'weekly':
+            start_date = end_date - timedelta(weeks=1)
+        elif period_type == 'monthly':
+            start_date = end_date - timedelta(days=30)
+        else:
+            start_date = end_date - timedelta(days=1)
+    return start_date, end_date
+
+
+def previous_period_bounds(start_date, end_date):
+    """Periode sebelumnya dengan durasi sama (untuk perbandingan kWh)."""
+    duration = end_date - start_date
+    if duration.total_seconds() <= 0:
+        duration = timedelta(days=1)
+    prev_end = start_date
+    prev_start = start_date - duration
+    return prev_start, prev_end
+
+
 class DatabaseManager:
+    ENERGY_BY_DEVICE_SQL = """
+        WITH energy_data AS (
+            SELECT
+                p.device_address,
+                p.created_at,
+                COALESCE(p.power, 0) as power,
+                COALESCE(p.energy, 0) as energy,
+                LAG(p.created_at) OVER (
+                    PARTITION BY p.device_address ORDER BY p.created_at
+                ) as prev_time,
+                LAG(COALESCE(p.power, 0)) OVER (
+                    PARTITION BY p.device_address ORDER BY p.created_at
+                ) as prev_power
+            FROM pzem_data p
+            LEFT JOIN pzem_devices dm ON p.device_address = dm.device_address
+            WHERE p.created_at >= %s AND p.created_at <= %s
+            {location_filter}
+        ),
+        energy_calc AS (
+            SELECT
+                device_address,
+                SUM(
+                    CASE
+                        WHEN prev_time IS NOT NULL AND prev_time < created_at
+                        THEN (
+                            (power + prev_power) / 2.0 *
+                            EXTRACT(EPOCH FROM (created_at - prev_time)) / 3600.0 / 1000.0
+                        )
+                        ELSE 0
+                    END
+                ) as energy_from_power
+            FROM energy_data
+            GROUP BY device_address
+        )
+        SELECT
+            p.device_address,
+            CASE
+                WHEN MAX(p.energy) IS NOT NULL AND MIN(p.energy) IS NOT NULL
+                     AND MAX(p.energy) >= MIN(p.energy)
+                     AND (MAX(p.energy) - MIN(p.energy)) >= 0
+                     AND (MAX(p.energy) - MIN(p.energy)) < 10000
+                     AND COUNT(*) > 1
+                THEN GREATEST(0, MAX(p.energy) - MIN(p.energy))
+                WHEN ec.energy_from_power IS NOT NULL AND ec.energy_from_power > 0
+                THEN ec.energy_from_power
+                ELSE (
+                    GREATEST(0, AVG(COALESCE(p.power, 0)) *
+                    EXTRACT(EPOCH FROM (MAX(p.created_at) - MIN(p.created_at))) / 3600.0 / 1000.0)
+                )
+            END as energy_kwh,
+            COUNT(*) as total_records,
+            MIN(p.created_at) as period_start,
+            MAX(p.created_at) as period_end
+        FROM pzem_data p
+        LEFT JOIN pzem_devices dm ON p.device_address = dm.device_address
+        LEFT JOIN energy_calc ec ON p.device_address = ec.device_address
+        WHERE p.created_at >= %s AND p.created_at <= %s
+        {location_filter}
+        GROUP BY p.device_address, ec.energy_from_power
+        ORDER BY p.device_address
+        LIMIT 50
+    """
+
     def __init__(self):
         self.connection = None
     
@@ -281,6 +370,214 @@ class DatabaseManager:
             if conn:
                 self.close_connection(conn)
 
+    def _location_filter_clause(self, location):
+        if location and location != 'All Locations' and location.strip():
+            return """
+                AND (
+                    dm.location = %s
+                    OR p.device_address LIKE %s
+                )
+            """, [location, f"{location}-%"]
+        return "", []
+
+    def _fetch_energy_by_device(self, cursor, start_date, end_date, location=None):
+        """Hitung kWh per device untuk rentang waktu tertentu."""
+        location_filter, location_params = self._location_filter_clause(location)
+        query = self.ENERGY_BY_DEVICE_SQL.format(location_filter=location_filter)
+        params = [start_date, end_date] + location_params + [start_date, end_date] + location_params
+        cursor.execute(query, tuple(params))
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    def get_kwh_comparison_data(self, period_type='daily', start_date=None, end_date=None, location=None):
+        """Perbandingan kWh: periode terpilih vs periode sebelumnya + breakdown waktu."""
+        conn = None
+        try:
+            start_date, end_date = resolve_report_period(period_type, start_date, end_date)
+            prev_start, prev_end = previous_period_bounds(start_date, end_date)
+            duration_hours = max((end_date - start_date).total_seconds() / 3600.0, 1.0)
+
+            conn = self.get_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("SET statement_timeout = '45s'")
+
+            current_rows = self._fetch_energy_by_device(cursor, start_date, end_date, location)
+            previous_rows = self._fetch_energy_by_device(cursor, prev_start, prev_end, location)
+
+            # Bucket harian atau per jam tergantung durasi periode
+            if duration_hours <= 48:
+                bucket_trunc = "hour"
+                bucket_label = "hourly"
+            else:
+                bucket_trunc = "day"
+                bucket_label = "daily"
+
+            location_filter, location_params = self._location_filter_clause(location)
+            breakdown_query = f"""
+                WITH bucketed AS (
+                    SELECT
+                        DATE_TRUNC('{bucket_trunc}', p.created_at) as time_bucket,
+                        p.device_address,
+                        p.created_at,
+                        COALESCE(p.power, 0) as power,
+                        COALESCE(p.energy, 0) as energy,
+                        LAG(p.created_at) OVER (
+                            PARTITION BY p.device_address, DATE_TRUNC('{bucket_trunc}', p.created_at)
+                            ORDER BY p.created_at
+                        ) as prev_time,
+                        LAG(COALESCE(p.power, 0)) OVER (
+                            PARTITION BY p.device_address, DATE_TRUNC('{bucket_trunc}', p.created_at)
+                            ORDER BY p.created_at
+                        ) as prev_power
+                    FROM pzem_data p
+                    LEFT JOIN pzem_devices dm ON p.device_address = dm.device_address
+                    WHERE p.created_at >= %s AND p.created_at <= %s
+                    {location_filter}
+                ),
+                bucket_energy AS (
+                    SELECT
+                        time_bucket,
+                        device_address,
+                        SUM(
+                            CASE
+                                WHEN prev_time IS NOT NULL AND prev_time < created_at
+                                THEN (
+                                    (power + prev_power) / 2.0 *
+                                    EXTRACT(EPOCH FROM (created_at - prev_time)) / 3600.0 / 1000.0
+                                )
+                                ELSE 0
+                            END
+                        ) as energy_from_power,
+                        MAX(energy) as max_energy,
+                        MIN(energy) as min_energy,
+                        COUNT(*) as sample_count
+                    FROM bucketed
+                    GROUP BY time_bucket, device_address
+                )
+                SELECT
+                    time_bucket,
+                    device_address,
+                    CASE
+                        WHEN max_energy IS NOT NULL AND min_energy IS NOT NULL
+                             AND max_energy >= min_energy
+                             AND (max_energy - min_energy) < 10000
+                             AND sample_count > 1
+                        THEN GREATEST(0, max_energy - min_energy)
+                        WHEN energy_from_power IS NOT NULL AND energy_from_power > 0
+                        THEN energy_from_power
+                        ELSE 0
+                    END as energy_kwh
+                FROM bucket_energy
+                ORDER BY time_bucket ASC, device_address ASC
+                LIMIT 500
+            """
+            breakdown_params = [start_date, end_date] + location_params
+            cursor.execute(breakdown_query, tuple(breakdown_params))
+            breakdown_rows = [dict(row) for row in cursor.fetchall()]
+            cursor.close()
+
+            def summarize(rows):
+                by_device = {}
+                total = 0.0
+                for row in rows:
+                    device = row.get('device_address', 'Unknown')
+                    kwh = float(row.get('energy_kwh') or 0)
+                    by_device[device] = {
+                        'device_address': device,
+                        'energy_kwh': round(kwh, 3),
+                        'total_records': int(row.get('total_records') or 0),
+                    }
+                    total += kwh
+                return round(total, 3), by_device
+
+            current_total, current_by_device = summarize(current_rows)
+            previous_total, previous_by_device = summarize(previous_rows)
+
+            all_devices = sorted(set(current_by_device) | set(previous_by_device))
+            device_comparison = []
+            for device in all_devices:
+                cur = current_by_device.get(device, {}).get('energy_kwh', 0.0)
+                prev = previous_by_device.get(device, {}).get('energy_kwh', 0.0)
+                if prev > 0:
+                    change_pct = ((cur - prev) / prev) * 100.0
+                elif cur > 0:
+                    change_pct = 100.0
+                else:
+                    change_pct = 0.0
+                device_comparison.append({
+                    'device_address': device,
+                    'current_kwh': cur,
+                    'previous_kwh': prev,
+                    'delta_kwh': round(cur - prev, 3),
+                    'change_percent': round(change_pct, 1),
+                })
+
+            if previous_total > 0:
+                total_change_pct = ((current_total - previous_total) / previous_total) * 100.0
+            elif current_total > 0:
+                total_change_pct = 100.0
+            else:
+                total_change_pct = 0.0
+
+            # Agregasi breakdown per bucket (total semua fase)
+            buckets = {}
+            for row in breakdown_rows:
+                bucket = row['time_bucket']
+                key = bucket.isoformat() if hasattr(bucket, 'isoformat') else str(bucket)
+                if key not in buckets:
+                    buckets[key] = {'time_bucket': bucket, 'total_kwh': 0.0, 'by_device': {}}
+                kwh = float(row.get('energy_kwh') or 0)
+                device = row.get('device_address', 'Unknown')
+                buckets[key]['total_kwh'] += kwh
+                buckets[key]['by_device'][device] = round(kwh, 3)
+
+            time_breakdown = []
+            for key in sorted(buckets.keys()):
+                entry = buckets[key]
+                time_breakdown.append({
+                    'time_bucket': entry['time_bucket'],
+                    'total_kwh': round(entry['total_kwh'], 3),
+                    'by_device': entry['by_device'],
+                })
+
+            return {
+                'period_type': period_type,
+                'bucket_granularity': bucket_label,
+                'current_period': {
+                    'start': start_date,
+                    'end': end_date,
+                    'total_kwh': current_total,
+                    'by_device': current_by_device,
+                },
+                'previous_period': {
+                    'start': prev_start,
+                    'end': prev_end,
+                    'total_kwh': previous_total,
+                    'by_device': previous_by_device,
+                },
+                'comparison': {
+                    'delta_kwh': round(current_total - previous_total, 3),
+                    'change_percent': round(total_change_pct, 1),
+                    'by_device': device_comparison,
+                },
+                'time_breakdown': time_breakdown,
+            }
+        except Exception as e:
+            logger.error(f"Error getting kWh comparison data: {e}")
+            start_date, end_date = resolve_report_period(period_type, start_date, end_date)
+            prev_start, prev_end = previous_period_bounds(start_date, end_date)
+            return {
+                'period_type': period_type,
+                'bucket_granularity': 'daily',
+                'current_period': {'start': start_date, 'end': end_date, 'total_kwh': 0.0, 'by_device': {}},
+                'previous_period': {'start': prev_start, 'end': prev_end, 'total_kwh': 0.0, 'by_device': {}},
+                'comparison': {'delta_kwh': 0.0, 'change_percent': 0.0, 'by_device': []},
+                'time_breakdown': [],
+            }
+        finally:
+            if conn:
+                self.close_connection(conn)
+
     def get_report_data(self, period_type='daily', start_date=None, end_date=None, location=None):
         """Get data for report generation with simplified queries to avoid hanging.
         
@@ -300,29 +597,9 @@ class DatabaseManager:
             # Set connection timeout
             cursor.execute("SET statement_timeout = '30s'")
             
-            # Determine period if not provided
-            if not end_date:
-                end_date = datetime.now()
-            
-            if not start_date:
-                if period_type == 'daily':
-                    start_date = end_date - timedelta(days=1)
-                elif period_type == 'weekly':
-                    start_date = end_date - timedelta(weeks=1)
-                elif period_type == 'monthly':
-                    start_date = end_date - timedelta(days=30)
-            
-            location_filter = ""
-            location_params = []
-            if location and location != 'All Locations' and location.strip():
-                # Filter by location: join with pzem_devices or match device_address pattern
-                location_filter = """
-                AND (
-                    dm.location = %s 
-                    OR p.device_address LIKE %s
-                )
-                """
-                location_params = [location, f"{location}-%"]
+            start_date, end_date = resolve_report_period(period_type, start_date, end_date)
+            location_filter, location_params = self._location_filter_clause(location)
+            if location_params:
                 logger.info(f"Filtering report by location: {location}")
             
             logger.info(f"Querying data from {start_date} to {end_date}")
@@ -339,44 +616,17 @@ class DatabaseManager:
                     'start_date': start_date,
                     'end_date': end_date,
                     'phase_data': [],
-                    'time_series': []
+                    'time_series': [],
+                    'kwh_comparison': self.get_kwh_comparison_data(
+                        period_type, start_date, end_date, location
+                    ),
                 }
             
-            # Phase data query with accurate energy calculation
-            # Energy calculation: 
-            # 1. Primary: Use energy counter difference (MAX - MIN) if valid
-            # 2. Fallback: Calculate from power using time-weighted integration
-            simple_query = """
-            WITH energy_data AS (
-                SELECT 
-                    p.device_address,
-                    p.created_at,
-                    COALESCE(p.power, 0) as power,
-                    COALESCE(p.energy, 0) as energy,
-                    LAG(p.created_at) OVER (PARTITION BY p.device_address ORDER BY p.created_at) as prev_time,
-                    LAG(COALESCE(p.power, 0)) OVER (PARTITION BY p.device_address ORDER BY p.created_at) as prev_power
-                FROM pzem_data p
-                LEFT JOIN pzem_devices dm ON p.device_address = dm.device_address
-                WHERE p.created_at >= %s AND p.created_at <= %s
-                """ + location_filter + """
-            ),
-            energy_calc AS (
-                SELECT 
-                    device_address,
-                    SUM(
-                        CASE 
-                            WHEN prev_time IS NOT NULL AND prev_time < created_at
-                            THEN (
-                                (power + prev_power) / 2.0 * 
-                                EXTRACT(EPOCH FROM (created_at - prev_time)) / 3600.0 / 1000.0
-                            )
-                            ELSE 0
-                        END
-                    ) as energy_from_power
-                FROM energy_data
-                GROUP BY device_address
-            )
-            SELECT 
+            logger.info("Executing phase data query with improved energy calculation...")
+            phase_rows = self._fetch_energy_by_device(cursor, start_date, end_date, location)
+
+            metrics_query = """
+            SELECT
                 p.device_address,
                 COUNT(*) as total_records,
                 AVG(COALESCE(p.voltage, 220)) as avg_voltage,
@@ -384,38 +634,29 @@ class DatabaseManager:
                 AVG(COALESCE(p.power, 0)) as avg_power,
                 AVG(COALESCE(p.frequency, 50)) as avg_frequency,
                 AVG(COALESCE(p.power_factor, 1)) as avg_power_factor,
-                CASE 
-                    WHEN MAX(p.energy) IS NOT NULL AND MIN(p.energy) IS NOT NULL 
-                         AND MAX(p.energy) >= MIN(p.energy)
-                         AND (MAX(p.energy) - MIN(p.energy)) >= 0
-                         AND (MAX(p.energy) - MIN(p.energy)) < 10000
-                         AND COUNT(*) > 1
-                    THEN GREATEST(0, MAX(p.energy) - MIN(p.energy))
-                    WHEN ec.energy_from_power IS NOT NULL AND ec.energy_from_power > 0
-                    THEN ec.energy_from_power
-                    ELSE (
-                        GREATEST(0, AVG(COALESCE(p.power, 0)) * 
-                        EXTRACT(EPOCH FROM (MAX(p.created_at) - MIN(p.created_at))) / 3600.0 / 1000.0)
-                    )
-                END as energy_consumed,
                 MIN(p.created_at) as period_start,
                 MAX(p.created_at) as period_end,
                 MAX(COALESCE(p.energy, 0)) as max_energy,
                 MIN(COALESCE(p.energy, 0)) as min_energy
             FROM pzem_data p
             LEFT JOIN pzem_devices dm ON p.device_address = dm.device_address
-            LEFT JOIN energy_calc ec ON p.device_address = ec.device_address
             WHERE p.created_at >= %s AND p.created_at <= %s
             """ + location_filter + """
-            GROUP BY p.device_address, ec.energy_from_power
+            GROUP BY p.device_address
             ORDER BY p.device_address
             LIMIT 50
             """
-            
-            logger.info("Executing phase data query with improved energy calculation...")
-            query_params = [start_date, end_date] + location_params + [start_date, end_date] + location_params
-            cursor.execute(simple_query, tuple(query_params))
-            phase_data = cursor.fetchall()
+            metrics_params = [start_date, end_date] + location_params
+            cursor.execute(metrics_query, tuple(metrics_params))
+            metrics_by_device = {row['device_address']: dict(row) for row in cursor.fetchall()}
+
+            phase_data = []
+            for row in phase_rows:
+                device = row['device_address']
+                merged = dict(metrics_by_device.get(device, {}))
+                merged.update(row)
+                merged['energy_consumed'] = float(row.get('energy_kwh') or 0)
+                phase_data.append(merged)
             
             logger.info(f"Found {len(phase_data)} devices/phases")
             # Log energy calculation details for debugging
@@ -453,12 +694,17 @@ class DatabaseManager:
             
             cursor.close()
             
+            kwh_comparison = self.get_kwh_comparison_data(
+                period_type, start_date, end_date, location
+            )
+
             result = {
                 'period_type': period_type,
                 'start_date': start_date,
                 'end_date': end_date,
-                'phase_data': [dict(row) for row in phase_data],
-                'time_series': [dict(row) for row in time_series_data]
+                'phase_data': phase_data,
+                'time_series': [dict(row) for row in time_series_data],
+                'kwh_comparison': kwh_comparison,
             }
             
             logger.info("Successfully retrieved simplified report data")
@@ -472,7 +718,8 @@ class DatabaseManager:
                 'start_date': start_date or datetime.now() - timedelta(days=1),
                 'end_date': end_date or datetime.now(),
                 'phase_data': [],
-                'time_series': []
+                'time_series': [],
+                'kwh_comparison': {},
             }
         finally:
             if conn:
@@ -521,6 +768,10 @@ class ReportGenerator:
                 self._create_power_trend_chart(data)
             elif chart_type == 'phase_distribution':
                 self._create_phase_distribution_chart(data)
+            elif chart_type == 'kwh_comparison':
+                self._create_kwh_comparison_chart(data)
+            elif chart_type == 'kwh_timeline':
+                self._create_kwh_timeline_chart(data)
             else:
                 raise ValueError(f"Unknown chart type: {chart_type}")
             
@@ -585,7 +836,175 @@ class ReportGenerator:
             plt.pie(powers, labels=phases, autopct='%1.1f%%', 
                    colors=colors_pie[:len(powers)], startangle=90)
             plt.title('Power Distribution by Phase', fontsize=14, fontweight='bold')
-    
+
+    def _create_kwh_comparison_chart(self, comparison):
+        """Bar chart perbandingan kWh periode terpilih vs sebelumnya."""
+        current = float(comparison.get('current_period', {}).get('total_kwh') or 0)
+        previous = float(comparison.get('previous_period', {}).get('total_kwh') or 0)
+        labels = ['Periode Terpilih', 'Periode Sebelumnya']
+        values = [current, previous]
+        colors_bar = ['#2E86AB', '#A23B72']
+
+        if current <= 0 and previous <= 0:
+            plt.text(0.5, 0.5, 'Tidak ada data kWh', ha='center', va='center', fontsize=14)
+            plt.title('Perbandingan kWh - Tidak Ada Data')
+            return
+
+        bars = plt.bar(labels, values, color=colors_bar, width=0.55)
+        for bar, val in zip(bars, values):
+            plt.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + max(values) * 0.02,
+                f'{val:.3f}',
+                ha='center', va='bottom', fontweight='bold',
+            )
+        plt.ylabel('Energi (kWh)', fontsize=12)
+        plt.title('Perbandingan Total kWh antar Periode', fontsize=14, fontweight='bold')
+        plt.grid(axis='y', alpha=0.3)
+
+    def _create_kwh_timeline_chart(self, comparison):
+        """Line/bar chart breakdown kWh berdasarkan waktu dalam periode terpilih."""
+        breakdown = comparison.get('time_breakdown') or []
+        if not breakdown:
+            plt.text(0.5, 0.5, 'Tidak ada breakdown kWh', ha='center', va='center', fontsize=14)
+            plt.title('Breakdown kWh - Tidak Ada Data')
+            return
+
+        times = []
+        totals = []
+        for row in breakdown:
+            bucket = row.get('time_bucket')
+            if hasattr(bucket, 'strftime'):
+                fmt = '%d/%m %H:%M' if comparison.get('bucket_granularity') == 'hourly' else '%d/%m/%Y'
+                times.append(bucket.strftime(fmt))
+            else:
+                times.append(str(bucket)[:16])
+            totals.append(float(row.get('total_kwh') or 0))
+
+        plt.bar(times, totals, color='#45B7D1', alpha=0.85)
+        plt.xticks(rotation=45, ha='right')
+        plt.ylabel('Energi (kWh)', fontsize=12)
+        granularity = 'Per Jam' if comparison.get('bucket_granularity') == 'hourly' else 'Harian'
+        plt.title(f'Breakdown kWh {granularity} (Periode Terpilih)', fontsize=14, fontweight='bold')
+        plt.grid(axis='y', alpha=0.3)
+
+    def _format_change_percent(self, value):
+        sign = '+' if value > 0 else ''
+        return f"{sign}{value:.1f}%"
+
+    def _append_kwh_comparison_section(self, story, comparison, chart_files=None):
+        """Tambahkan seksi perbandingan kWh sebagai informasi pendukung."""
+        if not comparison:
+            return
+
+        if chart_files is None:
+            chart_files = []
+
+        story.append(Paragraph("PERBANDINGAN KWH (INFORMASI PENDUKUNG)", self.heading_style))
+
+        cur = comparison.get('current_period', {})
+        prev = comparison.get('previous_period', {})
+        cmp_info = comparison.get('comparison', {})
+        bucket_label = 'per jam' if comparison.get('bucket_granularity') == 'hourly' else 'harian'
+
+        def fmt_dt(value):
+            if value is None:
+                return '-'
+            if hasattr(value, 'strftime'):
+                return value.strftime('%Y-%m-%d %H:%M')
+            return str(value)[:16]
+
+        period_text = f"""
+        <b>Periode terpilih:</b> {fmt_dt(cur.get('start'))} s/d {fmt_dt(cur.get('end'))}<br/>
+        <b>Periode pembanding:</b> {fmt_dt(prev.get('start'))} s/d {fmt_dt(prev.get('end'))}<br/>
+        <i>Periode pembanding memiliki durasi yang sama dengan periode terpilih (periode sebelumnya).</i>
+        """
+        story.append(Paragraph(period_text, self.normal_style))
+        story.append(Spacer(1, 10))
+
+        summary_rows = [
+            ['Metrik', 'Periode Terpilih', 'Periode Sebelumnya', 'Selisih', 'Perubahan'],
+            [
+                'Total kWh',
+                f"{float(cur.get('total_kwh') or 0):.3f}",
+                f"{float(prev.get('total_kwh') or 0):.3f}",
+                f"{float(cmp_info.get('delta_kwh') or 0):+.3f}",
+                self._format_change_percent(float(cmp_info.get('change_percent') or 0)),
+            ],
+        ]
+        for device_row in cmp_info.get('by_device', []):
+            summary_rows.append([
+                f"Phase {device_row.get('device_address', '-')}",
+                f"{float(device_row.get('current_kwh') or 0):.3f}",
+                f"{float(device_row.get('previous_kwh') or 0):.3f}",
+                f"{float(device_row.get('delta_kwh') or 0):+.3f}",
+                self._format_change_percent(float(device_row.get('change_percent') or 0)),
+            ])
+
+        summary_table = Table(summary_rows, colWidths=[110, 90, 90, 70, 70])
+        summary_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ]))
+        story.append(summary_table)
+        story.append(Spacer(1, 12))
+
+        breakdown = comparison.get('time_breakdown') or []
+        if breakdown:
+            story.append(Paragraph(f"BREAKDOWN KWH {bucket_label.upper()} (PERIODE TERPILIH)", self.heading_style))
+            breakdown_header = ['Waktu', 'Total kWh']
+            devices = sorted({
+                dev
+                for row in breakdown
+                for dev in (row.get('by_device') or {}).keys()
+            })
+            for dev in devices:
+                breakdown_header.append(f"Phase {dev}")
+
+            breakdown_rows = [breakdown_header]
+            for row in breakdown:
+                bucket = row.get('time_bucket')
+                if hasattr(bucket, 'strftime'):
+                    fmt = '%Y-%m-%d %H:%M' if comparison.get('bucket_granularity') == 'hourly' else '%Y-%m-%d'
+                    label = bucket.strftime(fmt)
+                else:
+                    label = str(bucket)[:16]
+                line = [label, f"{float(row.get('total_kwh') or 0):.3f}"]
+                by_device = row.get('by_device') or {}
+                for dev in devices:
+                    line.append(f"{float(by_device.get(dev) or 0):.3f}")
+                breakdown_rows.append(line)
+
+            breakdown_table = Table(breakdown_rows)
+            breakdown_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.lightgrey),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ]))
+            story.append(breakdown_table)
+            story.append(Spacer(1, 12))
+
+        chart_file = self.create_chart_image(comparison, 'kwh_comparison')
+        if chart_file and os.path.exists(chart_file):
+            chart_files.append(chart_file)
+            story.append(RLImage(chart_file, width=420, height=250))
+            story.append(Spacer(1, 10))
+
+        timeline_file = self.create_chart_image(comparison, 'kwh_timeline')
+        if timeline_file and os.path.exists(timeline_file):
+            chart_files.append(timeline_file)
+            story.append(RLImage(timeline_file, width=500, height=260))
+            story.append(Spacer(1, 20))
+
     def generate_report(self, period_type='daily', start_date=None, end_date=None, location=None, output_file=None):
         """Generate comprehensive PDF report with enhanced error handling.
         
@@ -750,6 +1169,11 @@ class ReportGenerator:
             
             story.append(phase_table)
             story.append(Spacer(1, 20))
+
+            # Perbandingan kWh dari log berdasarkan waktu terpilih
+            kwh_comparison = data.get('kwh_comparison') or {}
+            if kwh_comparison:
+                self._append_kwh_comparison_section(story, kwh_comparison, chart_files)
             
             # PLN Billing Breakdown (jika ada data energi)
             if phase_dict and total_energy > 0:

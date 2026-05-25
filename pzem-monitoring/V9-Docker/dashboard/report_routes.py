@@ -217,6 +217,82 @@ def report_dashboard():
             color: #666;
             font-size: 0.9rem;
         }
+
+        .kwh-preview {
+            margin: 24px 0;
+            padding: 20px;
+            background: #f0f4ff;
+            border: 2px solid #c5d0f5;
+            border-radius: 12px;
+            display: none;
+        }
+
+        .kwh-preview.visible {
+            display: block;
+        }
+
+        .kwh-preview h3 {
+            color: #2c3e50;
+            margin-bottom: 12px;
+            font-size: 1.1rem;
+        }
+
+        .kwh-preview-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .kwh-stat {
+            background: white;
+            border-radius: 8px;
+            padding: 12px;
+            text-align: center;
+            border: 1px solid #dde3f5;
+        }
+
+        .kwh-stat .label {
+            font-size: 0.8rem;
+            color: #666;
+            margin-bottom: 4px;
+        }
+
+        .kwh-stat .value {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: #2c3e50;
+        }
+
+        .kwh-stat .value.positive { color: #c0392b; }
+        .kwh-stat .value.negative { color: #27ae60; }
+
+        .kwh-device-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .kwh-device-table th,
+        .kwh-device-table td {
+            padding: 8px 10px;
+            border-bottom: 1px solid #e9ecef;
+            text-align: center;
+        }
+
+        .kwh-device-table th {
+            background: #667eea;
+            color: white;
+        }
+
+        .kwh-preview-note {
+            font-size: 0.85rem;
+            color: #666;
+            margin-top: 10px;
+        }
     </style>
 </head>
 <body>
@@ -291,6 +367,41 @@ def report_dashboard():
                 Generate Report
             </button>
         </form>
+
+        <div id="kwhPreview" class="kwh-preview">
+            <h3><i class="fas fa-bolt"></i> Preview Perbandingan kWh</h3>
+            <div class="kwh-preview-grid">
+                <div class="kwh-stat">
+                    <div class="label">Periode Terpilih</div>
+                    <div class="value" id="kwhCurrent">-</div>
+                </div>
+                <div class="kwh-stat">
+                    <div class="label">Periode Sebelumnya</div>
+                    <div class="value" id="kwhPrevious">-</div>
+                </div>
+                <div class="kwh-stat">
+                    <div class="label">Selisih</div>
+                    <div class="value" id="kwhDelta">-</div>
+                </div>
+                <div class="kwh-stat">
+                    <div class="label">Perubahan</div>
+                    <div class="value" id="kwhChange">-</div>
+                </div>
+            </div>
+            <table class="kwh-device-table" id="kwhDeviceTable" style="display:none;">
+                <thead>
+                    <tr>
+                        <th>Phase</th>
+                        <th>Terpilih (kWh)</th>
+                        <th>Sebelumnya (kWh)</th>
+                        <th>Selisih</th>
+                        <th>Perubahan</th>
+                    </tr>
+                </thead>
+                <tbody id="kwhDeviceBody"></tbody>
+            </table>
+            <p class="kwh-preview-note" id="kwhPreviewNote"></p>
+        </div>
         
         <div id="status" class="status" style="display: none;"></div>
     </div>
@@ -303,6 +414,8 @@ def report_dashboard():
             const locationSelect = document.getElementById('location');
             const generateBtn = document.getElementById('generateBtn');
             const statusDiv = document.getElementById('status');
+            const kwhPreview = document.getElementById('kwhPreview');
+            let kwhPreviewTimer = null;
             
             // Load locations for dropdown
             try {
@@ -329,18 +442,109 @@ def report_dashboard():
                 } else {
                     customDateRange.style.display = 'none';
                 }
+                scheduleKwhPreview();
             });
+
+            locationSelect.addEventListener('change', scheduleKwhPreview);
+            document.getElementById('startDate').addEventListener('change', scheduleKwhPreview);
+            document.getElementById('endDate').addEventListener('change', scheduleKwhPreview);
+
+            function scheduleKwhPreview() {
+                clearTimeout(kwhPreviewTimer);
+                kwhPreviewTimer = setTimeout(loadKwhPreview, 400);
+            }
+
+            function formatKwh(value) {
+                return `${Number(value || 0).toFixed(3)} kWh`;
+            }
+
+            function formatChange(value) {
+                const num = Number(value || 0);
+                const sign = num > 0 ? '+' : '';
+                return `${sign}${num.toFixed(1)}%`;
+            }
+
+            async function loadKwhPreview() {
+                const params = new URLSearchParams();
+                params.append('period_type', periodSelect.value);
+                params.append('location', locationSelect.value);
+
+                if (periodSelect.value === 'custom') {
+                    const startVal = document.getElementById('startDate').value;
+                    const endVal = document.getElementById('endDate').value;
+                    if (!startVal || !endVal) return;
+                    params.append('start_date', startVal);
+                    params.append('end_date', endVal);
+                }
+
+                try {
+                    const response = await fetch(`/reports/api/kwh-comparison?${params.toString()}`);
+                    if (!response.ok) return;
+                    const data = await response.json();
+                    renderKwhPreview(data);
+                } catch (e) {
+                    console.warn('Could not load kWh preview:', e);
+                }
+            }
+
+            function renderKwhPreview(data) {
+                if (!data || !data.current_period) return;
+
+                kwhPreview.classList.add('visible');
+                document.getElementById('kwhCurrent').textContent = formatKwh(data.current_period.total_kwh);
+                document.getElementById('kwhPrevious').textContent = formatKwh(data.previous_period.total_kwh);
+
+                const delta = Number(data.comparison.delta_kwh || 0);
+                const deltaEl = document.getElementById('kwhDelta');
+                deltaEl.textContent = `${delta >= 0 ? '+' : ''}${delta.toFixed(3)} kWh`;
+                deltaEl.className = 'value ' + (delta > 0 ? 'positive' : delta < 0 ? 'negative' : '');
+
+                const change = Number(data.comparison.change_percent || 0);
+                const changeEl = document.getElementById('kwhChange');
+                changeEl.textContent = formatChange(change);
+                changeEl.className = 'value ' + (change > 0 ? 'positive' : change < 0 ? 'negative' : '');
+
+                const tbody = document.getElementById('kwhDeviceBody');
+                tbody.innerHTML = '';
+                const devices = data.comparison.by_device || [];
+                const table = document.getElementById('kwhDeviceTable');
+                if (devices.length > 0) {
+                    table.style.display = 'table';
+                    devices.forEach(row => {
+                        const tr = document.createElement('tr');
+                        tr.innerHTML = `
+                            <td>Phase ${row.device_address}</td>
+                            <td>${Number(row.current_kwh).toFixed(3)}</td>
+                            <td>${Number(row.previous_kwh).toFixed(3)}</td>
+                            <td>${Number(row.delta_kwh) >= 0 ? '+' : ''}${Number(row.delta_kwh).toFixed(3)}</td>
+                            <td>${formatChange(row.change_percent)}</td>
+                        `;
+                        tbody.appendChild(tr);
+                    });
+                } else {
+                    table.style.display = 'none';
+                }
+
+                const curStart = new Date(data.current_period.start).toLocaleString('id-ID');
+                const curEnd = new Date(data.current_period.end).toLocaleString('id-ID');
+                const prevStart = new Date(data.previous_period.start).toLocaleString('id-ID');
+                const prevEnd = new Date(data.previous_period.end).toLocaleString('id-ID');
+                document.getElementById('kwhPreviewNote').textContent =
+                    `Periode terpilih: ${curStart} – ${curEnd}. Pembanding: ${prevStart} – ${prevEnd}. Breakdown ${data.bucket_granularity === 'hourly' ? 'per jam' : 'harian'} disertakan di PDF.`;
+            }
             
             form.addEventListener('submit', async function(e) {
                 e.preventDefault();
                 
-                const formData = new FormData(form);
                 const params = new URLSearchParams();
-                
-                for (let [key, value] of formData.entries()) {
-                    if (value) {
-                        params.append(key, value);
-                    }
+                params.append('period_type', periodSelect.value);
+                params.append('location', locationSelect.value);
+
+                if (periodSelect.value === 'custom') {
+                    const startVal = document.getElementById('startDate').value;
+                    const endVal = document.getElementById('endDate').value;
+                    if (startVal) params.append('start_date', startVal);
+                    if (endVal) params.append('end_date', endVal);
                 }
                 
                 showStatus('Generating report... This may take a few minutes.', 'loading');
@@ -394,6 +598,7 @@ def report_dashboard():
             
             document.getElementById('startDate').value = toLocalISOString(weekAgo);
             document.getElementById('endDate').value = toLocalISOString(now);
+            scheduleKwhPreview();
         });
     </script>
 </body>
@@ -549,6 +754,73 @@ def report_locations():
     except Exception as e:
         logger.error(f"Error getting locations: {e}")
         return jsonify({'locations': ['All Locations']})
+
+@report_bp.route('/api/kwh-comparison')
+def kwh_comparison_api():
+    """API perbandingan kWh berdasarkan periode yang dipilih."""
+    try:
+        period_type = request.args.get('period_type', 'daily')
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        location = request.args.get('location')
+
+        if not location or location.strip() == '' or location == 'All Locations':
+            location = None
+
+        start_dt = None
+        end_dt = None
+        if start_date:
+            try:
+                start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+            except ValueError:
+                pass
+        if end_date:
+            try:
+                end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+            except ValueError:
+                pass
+
+        from report_generator import DatabaseManager
+        db_manager = DatabaseManager()
+        comparison = db_manager.get_kwh_comparison_data(
+            period_type=period_type,
+            start_date=start_dt,
+            end_date=end_dt,
+            location=location,
+        )
+
+        def serialize_dt(value):
+            if hasattr(value, 'isoformat'):
+                return value.isoformat()
+            return value
+
+        return jsonify({
+            'period_type': comparison.get('period_type'),
+            'bucket_granularity': comparison.get('bucket_granularity'),
+            'current_period': {
+                'start': serialize_dt(comparison['current_period']['start']),
+                'end': serialize_dt(comparison['current_period']['end']),
+                'total_kwh': comparison['current_period']['total_kwh'],
+            },
+            'previous_period': {
+                'start': serialize_dt(comparison['previous_period']['start']),
+                'end': serialize_dt(comparison['previous_period']['end']),
+                'total_kwh': comparison['previous_period']['total_kwh'],
+            },
+            'comparison': comparison.get('comparison', {}),
+            'time_breakdown': [
+                {
+                    'time_bucket': serialize_dt(row.get('time_bucket')),
+                    'total_kwh': row.get('total_kwh'),
+                    'by_device': row.get('by_device', {}),
+                }
+                for row in comparison.get('time_breakdown', [])
+            ],
+        })
+    except Exception as e:
+        logger.error(f"Error getting kWh comparison: {e}")
+        return jsonify({'error': 'Error getting kWh comparison'}), 500
+
 
 @report_bp.route('/api/summary')
 def report_summary():

@@ -4,6 +4,16 @@ PZEM 3-Phase Energy Monitoring Dashboard with Report Integration
 Enhanced version with improved code structure and error handling
 """
 
+import sys
+import os
+
+_root = os.path.dirname(os.path.abspath(__file__))
+for _parent in (_root, os.path.dirname(_root)):
+    if os.path.isdir(os.path.join(_parent, "shared")):
+        if _parent not in sys.path:
+            sys.path.insert(0, _parent)
+        break
+
 from flask import Flask, render_template, jsonify, request
 from flask_socketio import SocketIO, emit
 import psycopg2
@@ -27,6 +37,8 @@ JAKARTA_TZ = pytz.timezone('Asia/Jakarta')
 
 # Import report modules
 from report_routes import report_bp
+from config_routes import config_bp
+from mqtt_bridge import MqttBridgeManager
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key_here'
@@ -35,6 +47,7 @@ socketio = SocketIO(app, cors_allowed_origins="*", logger=False)
 
 # Register report blueprint
 app.register_blueprint(report_bp)
+app.register_blueprint(config_bp)
 
 # Setup logging with Windows compatibility
 logging.basicConfig(
@@ -58,6 +71,22 @@ DB_CONFIG = {
     'keepalives_interval': 10,
     'keepalives_count': 3,
 }
+
+# Chart period aliases (UI / report naming → SQL aggregation keys)
+CHART_PERIOD_ALIASES = {
+    'daily': 'day',
+    'harian': 'day',
+    'weekly': 'week',
+    'mingguan': 'week',
+    'monthly': 'month',
+    'bulanan': 'month',
+}
+
+
+def normalize_chart_period(period):
+    """Map daily/weekly/monthly (and Indonesian labels) to day/week/month."""
+    key = (period or 'hour').strip().lower()
+    return CHART_PERIOD_ALIASES.get(key, key)
 
 
 
@@ -83,6 +112,11 @@ class DatabaseManager:
             pass
         
         self.connect()
+
+        try:
+            self.ensure_mqtt_canvas_schema()
+        except Exception as schema_err:
+            logger.warning("[SCHEMA] mqtt/canvas extension: %s", schema_err)
         
         # Optimization: Simple in-memory cache with TTL
         self._cache = {}
@@ -149,6 +183,25 @@ class DatabaseManager:
             for key, _ in sorted_cache[:-100]:
                 del self._cache[key]
     
+    def ensure_mqtt_canvas_schema(self):
+        """Apply migrations/001_mqtt_canvas.sql if present (idempotent)."""
+        mig_dir = os.path.join(os.path.dirname(__file__), "migrations")
+        for fname in ("001_mqtt_canvas.sql", "002_mqtt_bridge_name_unique.sql"):
+            path = os.path.join(mig_dir, fname)
+            if not os.path.isfile(path):
+                logger.warning("[SCHEMA] Migration not found: %s", path)
+                continue
+            with open(path, "r", encoding="utf-8") as f:
+                sql = f.read()
+            try:
+                with self.pool_connection() as conn:
+                    conn.autocommit = True
+                    with conn.cursor() as cur:
+                        cur.execute(sql)
+                logger.info("[SCHEMA] applied %s", fname)
+            except Exception as ex:
+                logger.warning("[SCHEMA] %s: %s", fname, ex)
+
     def get_jakarta_time(self):
         """Get current Jakarta time"""
         return datetime.now(self.jakarta_tz)
@@ -426,6 +479,7 @@ class DatabaseManager:
     def get_device_data(self, device_address, period='hour', limit=100):
         """Ambil data device berdasarkan periode"""
         try:
+            period = normalize_chart_period(period)
             period_config = {
                 'hour': {'interval': '1 hour', 'limit': 60},
                 'day': {'interval': '1 day', 'limit': 144},
@@ -460,30 +514,32 @@ class DatabaseManager:
     def get_aggregated_data(self, device_address, period='hour'):
         """Data agregat dengan downsampling untuk performa yang lebih baik"""
         try:
-            # Konfigurasi dengan downsampling untuk performa
+            period = normalize_chart_period(period)
+            # DATE_TRUNC hanya mendukung unit standar (minute, hour, day, …).
+            # Downsampling ke max_points dilakukan di Python setelah query.
             period_configs = {
                 'hour': {
                     'interval': '1 hour',
                     'group_by': "DATE_TRUNC('minute', created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jakarta')",
-                    'max_points': 60  # 1 point per minute
+                    'max_points': 60,
                 },
                 'day': {
-                    'interval': '1 day', 
-                    'group_by': "DATE_TRUNC('15 minutes', created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jakarta')",
-                    'max_points': 96  # 1 point per 15 minutes (24*4)
+                    'interval': '1 day',
+                    'group_by': "DATE_TRUNC('minute', created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jakarta')",
+                    'max_points': 96,
                 },
                 'week': {
                     'interval': '1 week',
-                    'group_by': "DATE_TRUNC('hour', created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jakarta')", 
-                    'max_points': 168  # 1 point per hour (7*24)
+                    'group_by': "DATE_TRUNC('hour', created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jakarta')",
+                    'max_points': 168,
                 },
                 'month': {
                     'interval': '1 month',
-                    'group_by': "DATE_TRUNC('6 hours', created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jakarta')",
-                    'max_points': 120  # 1 point per 6 hours (30*4)
-                }
+                    'group_by': "DATE_TRUNC('hour', created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jakarta')",
+                    'max_points': 120,
+                },
             }
-            
+
             config = period_configs.get(period, period_configs['hour'])
             
             query = f"""
@@ -531,9 +587,12 @@ class DatabaseManager:
             return result
             
         except Exception as e:
-            logger.error(f"Error getting aggregated data: {e}")
+            logger.error(
+                f"Error getting aggregated data for {device_address} ({period}): {e}",
+                exc_info=True,
+            )
             return []
-    
+
     def get_all_latest_data(self):
         """Ambil data terbaru dengan timestamp yang benar - FIXED VERSION (with caching)"""
         cache_key = self._get_cache_key('all_latest')
@@ -582,7 +641,8 @@ class DatabaseManager:
                 EXTRACT(EPOCH FROM (NOW() - d.created_at))/60 as minutes_since_last_data,
                 -- Include location (building) dari pzem_devices
                 COALESCE(dm.location, 'Unknown') as location,
-                COALESCE(dm.device_name, 'Device ' || d.device_address) as device_name
+                COALESCE(dm.device_name, 'Device ' || d.device_address) as device_name,
+                d.mqtt_bridge_config_id
             FROM pzem_data d
             LEFT JOIN pzem_devices dm ON d.device_address = dm.device_address
                 ORDER BY d.device_address, d.created_at DESC
@@ -745,8 +805,21 @@ class DatabaseManager:
 
 # Inisialisasi database manager
 db_manager = DatabaseManager()
+app.config["DB_MANAGER"] = db_manager
+bridge_manager = MqttBridgeManager(db_manager)
+app.config["BRIDGE_MANAGER"] = bridge_manager
+try:
+    bridge_manager.start()
+except Exception as bm_err:
+    logger.warning("[BRIDGE-MGR] start: %s", bm_err)
 
 # Updated routes with enhanced calculations
+@app.route('/canvas')
+def canvas_monitor():
+    """Halaman khusus MQTT tunnel, definisi canvas, dan tampilan snapshot canvas."""
+    return render_template('canvas_monitor.html')
+
+
 @app.route('/')
 def index():
     """Halaman utama dashboard dengan report link"""
@@ -758,7 +831,13 @@ def index():
     enhanced_template = template_content.replace(
         '<p>Real-time Power Consumption Dashboard</p>',
         '''<p>Real-time Power Consumption Dashboard</p>
-        <div style="margin-top: 15px;">
+        <div style="margin-top: 15px; display: flex; justify-content: center; gap: 12px; flex-wrap: wrap;">
+            <a href="/canvas" style="background: linear-gradient(45deg, #2980b9, #3498db);
+                                     color: white; padding: 10px 20px; text-decoration: none;
+                                     border-radius: 10px; font-weight: 600; display: inline-block;
+                                     transition: all 0.3s ease;">
+                <i class="fas fa-layer-group"></i> MQTT Tunnel &amp; Canvas
+            </a>
             <a href="/reports" style="background: linear-gradient(45deg, #28a745, #20c997); 
                                      color: white; padding: 10px 20px; text-decoration: none; 
                                      border-radius: 10px; font-weight: 600; display: inline-block; 
@@ -839,7 +918,7 @@ def api_device_data(device_address):
 def api_chart_data(device_address):
     """API chart data dengan debugging"""
     try:
-        period = request.args.get('period', 'hour')
+        period = normalize_chart_period(request.args.get('period', 'hour'))
         data = db_manager.get_aggregated_data(device_address, period)
         
         logger.info(f"Chart data for {device_address} ({period}): {len(data)} points")

@@ -11,7 +11,9 @@ services:
       - "127.0.0.1:5412:5432"
 
   dashboard:
-    build: ./dashboard
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
     ports:
       - "5000:5000"
     depends_on:
@@ -23,13 +25,16 @@ services:
       - DB_PASS=Admin123
     volumes:
       - ./dashboard:/app
+      - ./shared:/app/shared
       - reports_data:/app/reports
     # Prevent OOM kill - reserve memory for dashboard
     mem_limit: 512m
     mem_reservation: 256m
 
   mqtt-listener:
-    build: ./mqtt
+    build:
+      context: .
+      dockerfile: mqtt/Dockerfile
     depends_on:
       - db
     environment:
@@ -39,6 +44,7 @@ services:
       - DB_PASS=Admin123
     volumes:
       - ./mqtt:/app
+      - ./shared:/app/shared
 
 volumes:
   pgdata:
