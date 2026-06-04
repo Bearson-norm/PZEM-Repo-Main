@@ -111,7 +111,7 @@ jobs:
     - name: Build dashboard image
       uses: docker/build-push-action@v5
       with:
-        context: ./pzem-monitoring/V9-Docker/dashboard
+        context: ./pzem-monitoring/V9-Docker
         file: ./pzem-monitoring/V9-Docker/dashboard/Dockerfile
         push: false
         tags: pzem-dashboard:test
@@ -121,7 +121,7 @@ jobs:
     - name: Build MQTT listener image
       uses: docker/build-push-action@v5
       with:
-        context: ./pzem-monitoring/V9-Docker/mqtt
+        context: ./pzem-monitoring/V9-Docker
         file: ./pzem-monitoring/V9-Docker/mqtt/Dockerfile
         push: false
         tags: pzem-mqtt:test
@@ -133,7 +133,8 @@ jobs:
       run: |
         # GitHub Actions runners use Docker Compose v2 (docker compose)
         docker compose config
-        docker compose build --no-cache
+        # Use cache for faster builds
+        docker compose build
 
   security:
     name: Security Scan
@@ -160,3 +161,18 @@ jobs:
         sarif_file: 'trivy-results.sarif'
       continue-on-error: true
       if: always()
+
+  ci-success:
+    name: CI Success Gate
+    runs-on: ubuntu-latest
+    needs: [test, build]
+    if: always()
+    
+    steps:
+    - name: Check CI status
+      run: |
+        if [ "${{ needs.test.result }}" != "success" ] || [ "${{ needs.build.result }}" != "success" ]; then
+          echo "❌ CI failed - test: ${{ needs.test.result }}, build: ${{ needs.build.result }}"
+          exit 1
+        fi
+        echo "✅ All CI jobs passed successfully"
