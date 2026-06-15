@@ -22,6 +22,7 @@ import math
 import logging
 import pytz
 from pln_calculator import PLNTariffCalculator, calculate_pln_bill
+from pln_tariff_settings import calculate_bill_resolved, get_calculator
 
 # Database config - PASTIKAN SAMA dengan mqtt_client.py
 DB_CONFIG = {
@@ -140,39 +141,18 @@ class ThreePhaseCalculator:
         }
     
     @staticmethod
-    def calculate_pln_billing(total_energy_kwh, tariff_class=None, ppn_percent=None):
+    def calculate_pln_billing(total_energy_kwh, tariff_class=None, ppn_percent=None, contracted_va=None):
         """
-        Hitung tagihan PLN berdasarkan sistem tarif blok (block tariff)
-        
-        Args:
-            total_energy_kwh: Total konsumsi energi dalam kWh
-            tariff_class: Golongan tarif PLN (R1, R2, B2, I3). 
-                         Jika None, akan membaca dari env PLN_TARIFF_CLASS (default: R1)
-            ppn_percent: Persentase PPN (default: 11% atau dari env PLN_PPN_PERCENT)
-        
-        Returns:
-            Dict berisi detail perhitungan tagihan PLN:
-            {
-                'energy_kwh': float,
-                'block1_energy_kwh': float,
-                'block2_energy_kwh': float,
-                'block1_cost_idr': float,
-                'block2_cost_idr': float,
-                'energy_cost_idr': float,
-                'abonemen_idr': float,
-                'subtotal_idr': float,
-                'ppn_percent': float,
-                'ppn_amount_idr': float,
-                'total_bill_idr': float,
-                'tariff_class': str,
-                'breakdown': dict
-            }
+        Hitung tagihan PLN berdasarkan pengaturan tersimpan (DB/env) atau override parameter.
         """
-        # Gunakan fungsi helper dari pln_calculator
-        if tariff_class is None:
-            tariff_class = os.getenv('PLN_TARIFF_CLASS', 'R1')
-        
-        return calculate_pln_bill(total_energy_kwh, tariff_class=tariff_class, ppn_percent=ppn_percent)
+        overrides = {}
+        if tariff_class is not None:
+            overrides["tariff_class"] = tariff_class
+        if ppn_percent is not None:
+            overrides["ppn_percent"] = ppn_percent
+        if contracted_va is not None:
+            overrides["contracted_va"] = contracted_va
+        return calculate_bill_resolved(total_energy_kwh, **overrides)
 
 def resolve_report_period(period_type='daily', start_date=None, end_date=None):
     """Normalisasi batas periode laporan."""
@@ -1079,7 +1059,11 @@ class ReportGenerator:
                 
                 # Gunakan perhitungan PLN yang akurat
                 pln_billing = ThreePhaseCalculator.calculate_pln_billing(total_energy)
-                tariff_class = pln_billing.get('tariff_class', 'R1')
+                tariff_class = pln_billing.get('tariff_class', 'B2')
+                breakdown = pln_billing.get('breakdown', {})
+                uses_rm = breakdown.get('uses_rekening_minimum', False)
+                energy_label = 'Energy Cost (kWh × tarif)' if uses_rm else 'Energy Cost (Blok 1+2)'
+                min_charge_label = 'Rekening Minimum (RM)' if uses_rm else 'Abonemen'
                 
                 summary_data = [
                     ['Parameter', 'Value', 'Unit'],
@@ -1090,8 +1074,8 @@ class ReportGenerator:
                     ['System Efficiency', f"{three_phase_power['efficiency_percentage']:.1f}", '%'],
                     ['Total Energy Consumed', f"{total_energy:.3f}", 'kWh'],
                     ['Tariff Class', tariff_class, '-'],
-                    ['Energy Cost (Blok 1+2)', f"Rp {pln_billing['energy_cost_idr']:,.0f}", 'IDR'],
-                    ['Abonemen', f"Rp {pln_billing['abonemen_idr']:,.0f}", 'IDR'],
+                    [energy_label, f"Rp {pln_billing['energy_cost_idr']:,.0f}", 'IDR'],
+                    [min_charge_label, f"Rp {pln_billing['abonemen_idr']:,.0f}", 'IDR'],
                     ['PPN ({:.0f}%)'.format(pln_billing['ppn_percent']), f"Rp {pln_billing['ppn_amount_idr']:,.0f}", 'IDR'],
                     ['TOTAL TAGIHAN PLN', f"Rp {pln_billing['total_bill_idr']:,.0f}", 'IDR'],
                     ['Power Imbalance', f"{phase_imbalance['power_imbalance_percent']:.1f}", '%'],
@@ -1183,26 +1167,61 @@ class ReportGenerator:
                 breakdown = pln_billing.get('breakdown', {})
                 
                 # Dapatkan info tarif
-                tariff_class = pln_billing.get('tariff_class', 'R1')
-                calculator = PLNTariffCalculator(tariff_class=tariff_class)
+                tariff_class = pln_billing.get('tariff_class', 'B2')
+                calculator = get_calculator()
                 tariff_info = calculator.get_tariff_info()
+                uses_rm = breakdown.get('uses_rekening_minimum', False)
+                
+                if uses_rm:
+                    rate = tariff_info['block1_rate_rp_per_kwh']
+                    va = breakdown.get('contracted_va', 53000)
+                    kva = breakdown.get('contracted_kva', va / 1000)
+                    billing_detail_data = [
+                        ['Item', 'Detail', 'Amount (Rp)'],
+                        ['Total Konsumsi', f"{pln_billing['energy_kwh']:.3f} kWh", '-'],
+                        ['Biaya Pemakaian',
+                         f"{pln_billing['energy_kwh']:.3f} kWh × Rp {rate:,.1f}/kWh",
+                         f"{pln_billing['energy_cost_idr']:,.0f}"],
+                        ['Rekening Minimum (RM)',
+                         f"40 jam × {kva:.1f} kVA × Rp {rate:,.1f}/kWh",
+                         f"{breakdown.get('rekening_minimum_idr', pln_billing['abonemen_idr']):,.0f}"],
+                        ['Subtotal',
+                         'max(Biaya Pemakaian, RM)' + (' — RM diterapkan' if breakdown.get('rm_applied') else ''),
+                         f"{pln_billing['subtotal_idr']:,.0f}"],
+                        ['PPN', f"{pln_billing['ppn_percent']:.0f}% dari Subtotal", f"{pln_billing['ppn_amount_idr']:,.0f}"],
+                        ['TOTAL TAGIHAN', 'Subtotal + PPN', f"{pln_billing['total_bill_idr']:,.0f}"]
+                    ]
+                    tariff_info_text = f"""
+                    <b>Info Tarif:</b> B-2/TR Bisnis, daya {va:,.0f} VA ({kva:.1f} kVA)<br/>
+                    Tarif: Rp {rate:,.1f}/kWh (flat, 6.600 VA–200 kVA)<br/>
+                    Rekening Minimum: 40 jam × {kva:.1f} kVA × Rp {rate:,.1f} = Rp {breakdown.get('rekening_minimum_idr', 0):,.0f}/bulan<br/>
+                    PPN: {tariff_info['ppn_percent']:.0f}%
+                    """
+                else:
+                    billing_detail_data = [
+                        ['Item', 'Detail', 'Amount (Rp)'],
+                        ['Total Konsumsi', f"{pln_billing['energy_kwh']:.3f} kWh", '-'],
+                        ['Blok 1', 
+                         f"{pln_billing['block1_energy_kwh']:.3f} kWh × Rp {tariff_info['block1_rate_rp_per_kwh']:,}/kWh",
+                         f"{pln_billing['block1_cost_idr']:,.0f}"],
+                        ['Blok 2', 
+                         f"{pln_billing['block2_energy_kwh']:.3f} kWh × Rp {tariff_info['block2_rate_rp_per_kwh']:,}/kWh",
+                         f"{pln_billing['block2_cost_idr']:,.0f}"],
+                        ['Biaya Energi', 'Blok 1 + Blok 2', f"{pln_billing['energy_cost_idr']:,.0f}"],
+                        ['Abonemen', f"Golongan {tariff_class}", f"{pln_billing['abonemen_idr']:,.0f}"],
+                        ['Subtotal', 'Biaya Energi + Abonemen', f"{pln_billing['subtotal_idr']:,.0f}"],
+                        ['PPN', f"{pln_billing['ppn_percent']:.0f}% dari Subtotal", f"{pln_billing['ppn_amount_idr']:,.0f}"],
+                        ['TOTAL TAGIHAN', 'Subtotal + PPN', f"{pln_billing['total_bill_idr']:,.0f}"]
+                    ]
+                    tariff_info_text = f"""
+                    <b>Info Tarif:</b> Golongan {tariff_class}<br/>
+                    Blok 1: 0-{tariff_info['block1_threshold_kwh']:.0f} kWh → Rp {tariff_info['block1_rate_rp_per_kwh']:,}/kWh<br/>
+                    Blok 2: >{tariff_info['block1_threshold_kwh']:.0f} kWh → Rp {tariff_info['block2_rate_rp_per_kwh']:,}/kWh<br/>
+                    Abonemen: Rp {tariff_info['abonemen_rp']:,}/bulan<br/>
+                    PPN: {tariff_info['ppn_percent']:.0f}%
+                    """
                 
                 # Tabel breakdown detail
-                billing_detail_data = [
-                    ['Item', 'Detail', 'Amount (Rp)'],
-                    ['Total Konsumsi', f"{pln_billing['energy_kwh']:.3f} kWh", '-'],
-                    ['Blok 1', 
-                     f"{pln_billing['block1_energy_kwh']:.3f} kWh × Rp {tariff_info['block1_rate_rp_per_kwh']:,}/kWh",
-                     f"{pln_billing['block1_cost_idr']:,.0f}"],
-                    ['Blok 2', 
-                     f"{pln_billing['block2_energy_kwh']:.3f} kWh × Rp {tariff_info['block2_rate_rp_per_kwh']:,}/kWh",
-                     f"{pln_billing['block2_cost_idr']:,.0f}"],
-                    ['Biaya Energi', 'Blok 1 + Blok 2', f"{pln_billing['energy_cost_idr']:,.0f}"],
-                    ['Abonemen', f"Golongan {tariff_class}", f"{pln_billing['abonemen_idr']:,.0f}"],
-                    ['Subtotal', 'Biaya Energi + Abonemen', f"{pln_billing['subtotal_idr']:,.0f}"],
-                    ['PPN', f"{pln_billing['ppn_percent']:.0f}% dari Subtotal", f"{pln_billing['ppn_amount_idr']:,.0f}"],
-                    ['TOTAL TAGIHAN', 'Subtotal + PPN', f"{pln_billing['total_bill_idr']:,.0f}"]
-                ]
                 
                 billing_table = Table(billing_detail_data, colWidths=[120, 250, 100])
                 billing_table.setStyle(TableStyle([
@@ -1225,17 +1244,8 @@ class ReportGenerator:
                 story.append(billing_table)
                 story.append(Spacer(1, 10))
                 
-                # Info tarif yang digunakan
-                tariff_info_text = f"""
-                <b>Info Tarif:</b> Golongan {tariff_class}<br/>
-                Blok 1: 0-{tariff_info['block1_threshold_kwh']:.0f} kWh → Rp {tariff_info['block1_rate_rp_per_kwh']:,}/kWh<br/>
-                Blok 2: >{tariff_info['block1_threshold_kwh']:.0f} kWh → Rp {tariff_info['block2_rate_rp_per_kwh']:,}/kWh<br/>
-                Abonemen: Rp {tariff_info['abonemen_rp']:,}/bulan<br/>
-                PPN: {tariff_info['ppn_percent']:.0f}%
-                """
                 story.append(Paragraph(tariff_info_text, self.normal_style))
-                # Note for period reports: abonemen is monthly
-                if period_type in ('daily', 'weekly'):
+                if not uses_rm and period_type in ('daily', 'weekly'):
                     days = 1 if period_type == 'daily' else 7
                     story.append(Paragraph(
                         f"<i>Note: Abonemen is monthly. For this {period_type} period, proportional abonemen ≈ Rp {pln_billing['abonemen_idr'] * days / 30:,.0f}</i>",

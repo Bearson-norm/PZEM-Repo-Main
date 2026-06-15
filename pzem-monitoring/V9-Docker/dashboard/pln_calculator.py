@@ -17,8 +17,10 @@ class PLNTariffConfig:
     block1_threshold: float  # Threshold untuk blok 1 (kWh)
     block1_rate: float  # Tarif blok 1 (Rp/kWh)
     block2_rate: float  # Tarif blok 2 (Rp/kWh)
-    abonemen: float  # Abonemen bulanan (Rp)
-    is_flat_rate: bool = False  # True untuk tarif flat (I3)
+    abonemen: float  # Abonemen bulanan tetap (Rp) — R1/R2
+    is_flat_rate: bool = False  # True untuk tarif flat (B2/TR, I3)
+    uses_rekening_minimum: bool = False  # True untuk B-2/TR (RM = 40 jam × kVA × tarif)
+    description: str = ''
 
 
 @dataclass
@@ -62,11 +64,13 @@ class PLNTariffCalculator:
         ),
         'B2': PLNTariffConfig(
             tariff_class='B2',
-            block1_threshold=200,
-            block1_rate=1445,
-            block2_rate=1699,
-            abonemen=40000,
-            is_flat_rate=False
+            block1_threshold=0,
+            block1_rate=1444.7,
+            block2_rate=1444.7,
+            abonemen=0,
+            is_flat_rate=True,
+            uses_rekening_minimum=True,
+            description='B-2/TR daya 6.600 VA–200 kVA (termasuk 33.000–53.000 VA)'
         ),
         'I3': PLNTariffConfig(
             tariff_class='I3',
@@ -81,13 +85,14 @@ class PLNTariffCalculator:
     # PPN default 11%
     DEFAULT_PPN = 0.11
     
-    def __init__(self, tariff_class: str = 'R1', ppn_percent: float = None):
+    def __init__(self, tariff_class: str = 'B2', ppn_percent: float = None, contracted_va: float = None):
         """
         Inisialisasi kalkulator
         
         Args:
             tariff_class: Golongan tarif (R1, R2, B2, I3)
             ppn_percent: Persentase PPN (default: 11% atau dari env)
+            contracted_va: Daya kontrak (VA) untuk B-2/TR — default dari env PLN_CONTRACTED_VA (53.000)
         """
         self.tariff_class = tariff_class.upper()
         
@@ -101,6 +106,10 @@ class PLNTariffCalculator:
             ppn_percent = float(os.getenv('PLN_PPN_PERCENT', self.DEFAULT_PPN))
         
         self.ppn_percent = ppn_percent
+
+        if contracted_va is None and self.config.uses_rekening_minimum:
+            contracted_va = float(os.getenv('PLN_CONTRACTED_VA', '53000'))
+        self.contracted_va = contracted_va
     
     def calculate_bill(self, energy_kwh: float) -> PLNBillCalculation:
         """
@@ -115,41 +124,54 @@ class PLNTariffCalculator:
         if energy_kwh < 0:
             raise ValueError("Konsumsi energi tidak boleh negatif")
         
-        # Untuk tarif flat (I3)
-        if self.config.is_flat_rate:
+        rekening_minimum = 0.0
+        rm_applied = False
+
+        if self.config.uses_rekening_minimum:
+            # B-2/TR: tarif flat + Rekening Minimum (RM1)
+            # RM = 40 jam × daya (kVA) × tarif per kWh
             block1_energy = energy_kwh
             block2_energy = 0
             block1_cost = energy_kwh * self.config.block1_rate
             block2_cost = 0
+            energy_cost = block1_cost
+            kva = (self.contracted_va or 53000) / 1000.0
+            rekening_minimum = 40 * kva * self.config.block1_rate
+            subtotal = max(energy_cost, rekening_minimum)
+            rm_applied = energy_cost < rekening_minimum
+            abonemen = rekening_minimum
+        elif self.config.is_flat_rate:
+            block1_energy = energy_kwh
+            block2_energy = 0
+            block1_cost = energy_kwh * self.config.block1_rate
+            block2_cost = 0
+            energy_cost = block1_cost
+            subtotal = energy_cost + self.config.abonemen
+            abonemen = self.config.abonemen
         else:
-            # Hitung energi per blok
             block1_energy = min(energy_kwh, self.config.block1_threshold)
             block2_energy = max(0, energy_kwh - self.config.block1_threshold)
-            
-            # Hitung biaya per blok
             block1_cost = block1_energy * self.config.block1_rate
             block2_cost = block2_energy * self.config.block2_rate
+            energy_cost = block1_cost + block2_cost
+            subtotal = energy_cost + self.config.abonemen
+            abonemen = self.config.abonemen
         
-        # Total biaya energi
-        energy_cost = block1_cost + block2_cost
-        
-        # Tambah abonemen
-        subtotal = energy_cost + self.config.abonemen
-        
-        # Hitung PPN
         ppn_amount = subtotal * self.ppn_percent
-        
-        # Total tagihan
         total_bill = subtotal + ppn_amount
         
-        # Breakdown detail
         breakdown = {
             'block1_energy_kwh': block1_energy,
             'block2_energy_kwh': block2_energy,
             'block1_cost_idr': block1_cost,
             'block2_cost_idr': block2_cost,
             'energy_cost_idr': energy_cost,
-            'abonemen_idr': self.config.abonemen,
+            'abonemen_idr': abonemen,
+            'rekening_minimum_idr': rekening_minimum,
+            'rm_applied': rm_applied,
+            'contracted_va': self.contracted_va,
+            'contracted_kva': (self.contracted_va or 0) / 1000.0 if self.contracted_va else None,
+            'uses_rekening_minimum': self.config.uses_rekening_minimum,
             'subtotal_idr': subtotal,
             'ppn_percent': self.ppn_percent * 100,
             'ppn_amount_idr': ppn_amount,
@@ -163,7 +185,7 @@ class PLNTariffCalculator:
             block1_cost=block1_cost,
             block2_cost=block2_cost,
             energy_cost=energy_cost,
-            abonemen=self.config.abonemen,
+            abonemen=abonemen,
             subtotal=subtotal,
             ppn_percent=self.ppn_percent * 100,
             ppn_amount=ppn_amount,
@@ -201,15 +223,24 @@ class PLNTariffCalculator:
     
     def get_tariff_info(self) -> Dict:
         """Dapatkan informasi tarif yang sedang digunakan"""
-        return {
+        info = {
             'tariff_class': self.tariff_class,
+            'description': self.config.description,
             'block1_threshold_kwh': self.config.block1_threshold,
             'block1_rate_rp_per_kwh': self.config.block1_rate,
             'block2_rate_rp_per_kwh': self.config.block2_rate,
             'abonemen_rp': self.config.abonemen,
             'is_flat_rate': self.config.is_flat_rate,
+            'uses_rekening_minimum': self.config.uses_rekening_minimum,
             'ppn_percent': self.ppn_percent * 100
         }
+        if self.config.uses_rekening_minimum and self.contracted_va:
+            kva = self.contracted_va / 1000.0
+            rm = 40 * kva * self.config.block1_rate
+            info['contracted_va'] = self.contracted_va
+            info['contracted_kva'] = kva
+            info['rekening_minimum_rp'] = rm
+        return info
     
     @classmethod
     def from_environment(cls) -> 'PLNTariffCalculator':
@@ -217,20 +248,29 @@ class PLNTariffCalculator:
         Buat kalkulator dari environment variables
         
         Environment variables:
-            PLN_TARIFF_CLASS: R1, R2, B2, I3 (default: R1)
+            PLN_TARIFF_CLASS: R1, R2, B2, I3 (default: B2)
+            PLN_CONTRACTED_VA: Daya kontrak VA untuk B-2/TR (default: 53000)
             PLN_PPN_PERCENT: Persentase PPN (default: 0.11 = 11%)
         """
-        tariff_class = os.getenv('PLN_TARIFF_CLASS', 'R1')
+        tariff_class = os.getenv('PLN_TARIFF_CLASS', 'B2')
         ppn_percent = os.getenv('PLN_PPN_PERCENT')
+        contracted_va = os.getenv('PLN_CONTRACTED_VA')
         
         if ppn_percent:
             ppn_percent = float(ppn_percent)
+        if contracted_va:
+            contracted_va = float(contracted_va)
         
-        return cls(tariff_class=tariff_class, ppn_percent=ppn_percent)
+        return cls(tariff_class=tariff_class, ppn_percent=ppn_percent, contracted_va=contracted_va)
 
 
 # Fungsi helper untuk kompatibilitas dengan kode yang ada
-def calculate_pln_bill(energy_kwh: float, tariff_class: str = 'R1', ppn_percent: float = None) -> Dict:
+def calculate_pln_bill(
+    energy_kwh: float,
+    tariff_class: str = 'B2',
+    ppn_percent: float = None,
+    contracted_va: float = None
+) -> Dict:
     """
     Fungsi helper untuk menghitung tagihan PLN
     
@@ -238,11 +278,16 @@ def calculate_pln_bill(energy_kwh: float, tariff_class: str = 'R1', ppn_percent:
         energy_kwh: Total konsumsi energi dalam kWh
         tariff_class: Golongan tarif (R1, R2, B2, I3)
         ppn_percent: Persentase PPN (default: 11%)
+        contracted_va: Daya kontrak (VA) untuk B-2/TR
         
     Returns:
         Dict berisi detail perhitungan tagihan
     """
-    calculator = PLNTariffCalculator(tariff_class=tariff_class, ppn_percent=ppn_percent)
+    calculator = PLNTariffCalculator(
+        tariff_class=tariff_class,
+        ppn_percent=ppn_percent,
+        contracted_va=contracted_va
+    )
     calculation = calculator.calculate_bill(energy_kwh)
     
     return {
@@ -285,10 +330,12 @@ if __name__ == "__main__":
     result2 = calculator_r1.calculate_bill(500)
     print(f"TOTAL TAGIHAN: Rp {result2.total_bill:,.0f}\n")
     
-    # Test 3: B2 dengan konsumsi 500 kWh
-    print("Test 3: B2, Konsumsi 500 kWh")
-    calculator_b2 = PLNTariffCalculator('B2')
+    # Test 3: B2/TR 53.000 VA dengan konsumsi 500 kWh
+    print("Test 3: B2/TR 53.000 VA, Konsumsi 500 kWh")
+    calculator_b2 = PLNTariffCalculator('B2', contracted_va=53000)
     result3 = calculator_b2.calculate_bill(500)
+    rm = 40 * 53 * 1444.7
+    print(f"  RM: Rp {rm:,.0f}, Biaya pemakaian: Rp {result3.energy_cost:,.0f}")
     print(f"TOTAL TAGIHAN: Rp {result3.total_bill:,.0f}\n")
     
     # Test 4: I3 (flat rate) dengan konsumsi 1000 kWh

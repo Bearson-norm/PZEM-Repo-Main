@@ -33,7 +33,8 @@ services:
       - DB_NAME=${DB_NAME:-pzem_monitoring}
       - DB_USER=${DB_USER:-postgres}
       - DB_PASS=${DB_PASS:-Admin123}
-      - PLN_TARIFF_CLASS=${PLN_TARIFF_CLASS:-R1}
+      - PLN_TARIFF_CLASS=${PLN_TARIFF_CLASS:-B2}
+      - PLN_CONTRACTED_VA=${PLN_CONTRACTED_VA:-53000}
       - PLN_PPN_PERCENT=${PLN_PPN_PERCENT:-0.11}
     volumes:
       - ./dashboard:/app

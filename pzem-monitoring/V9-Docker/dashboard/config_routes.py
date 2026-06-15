@@ -9,6 +9,12 @@ from flask import Blueprint, current_app, jsonify, request
 from psycopg2.extras import Json, RealDictCursor
 
 from canvas_service import build_chart_data, build_snapshot, get_canvas_by_id
+from pln_tariff_settings import (
+    calculate_bill_resolved,
+    save_settings,
+    settings_payload,
+    _normalize_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -372,6 +378,56 @@ def delete_canvas_config(canvas_id: int):
         return jsonify({"message": "deleted"})
     except Exception as e:
         logger.exception("delete_canvas: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+@config_bp.route("/api/pln-tariff-settings", methods=["GET"])
+def get_pln_tariff_settings():
+    try:
+        return jsonify(settings_payload(db_manager=_db()))
+    except Exception as e:
+        logger.exception("get_pln_tariff_settings: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+@config_bp.route("/api/pln-tariff-settings", methods=["PUT"])
+def update_pln_tariff_settings():
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+        normalized = _normalize_settings(body)
+        saved = save_settings(normalized, db_manager=_db())
+        payload = settings_payload(db_manager=_db())
+        payload["message"] = "Pengaturan tarif PLN disimpan"
+        payload["settings"]["source"] = saved.get("source", "database")
+        payload["settings"]["updated_at"] = saved.get("updated_at")
+        return jsonify(payload)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.exception("update_pln_tariff_settings: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+@config_bp.route("/api/pln-tariff-settings/preview", methods=["POST"])
+def preview_pln_tariff_bill():
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+        energy_kwh = float(body.get("energy_kwh", 0))
+        if energy_kwh < 0:
+            return jsonify({"error": "Konsumsi energi tidak boleh negatif"}), 400
+        overrides = {}
+        if "tariff_class" in body:
+            overrides["tariff_class"] = body["tariff_class"]
+        if "contracted_va" in body:
+            overrides["contracted_va"] = body["contracted_va"]
+        if "ppn_percent" in body:
+            overrides["ppn_percent"] = body["ppn_percent"]
+        bill = calculate_bill_resolved(energy_kwh, db_manager=_db(), **overrides)
+        return jsonify({"energy_kwh": energy_kwh, "bill": bill})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.exception("preview_pln_tariff_bill: %s", e)
         return jsonify({"error": str(e)}), 500
 
 

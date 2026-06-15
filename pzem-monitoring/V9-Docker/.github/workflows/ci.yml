@@ -84,7 +84,7 @@ jobs:
     - name: Build dashboard image
       uses: docker/build-push-action@v5
       with:
-        context: ./dashboard
+        context: .
         file: ./dashboard/Dockerfile
         push: false
         tags: pzem-dashboard:test
@@ -94,7 +94,7 @@ jobs:
     - name: Build MQTT listener image
       uses: docker/build-push-action@v5
       with:
-        context: ./mqtt
+        context: .
         file: ./mqtt/Dockerfile
         push: false
         tags: pzem-mqtt:test

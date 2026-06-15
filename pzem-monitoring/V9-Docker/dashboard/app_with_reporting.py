@@ -186,7 +186,7 @@ class DatabaseManager:
     def ensure_mqtt_canvas_schema(self):
         """Apply migrations/001_mqtt_canvas.sql if present (idempotent)."""
         mig_dir = os.path.join(os.path.dirname(__file__), "migrations")
-        for fname in ("001_mqtt_canvas.sql", "002_mqtt_bridge_name_unique.sql"):
+        for fname in ("001_mqtt_canvas.sql", "002_mqtt_bridge_name_unique.sql", "003_pln_tariff_settings.sql"):
             path = os.path.join(mig_dir, fname)
             if not os.path.isfile(path):
                 logger.warning("[SCHEMA] Migration not found: %s", path)

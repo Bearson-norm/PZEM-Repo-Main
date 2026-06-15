@@ -75,8 +75,10 @@ DB_NAME=pzem_monitoring
 DB_USER=postgres
 DB_PASS=Admin123
 
-# PLN Tariff Configuration
-PLN_TARIFF_CLASS=R1
+# PLN Tariff Configuration (B-2/TR bisnis, daya 53.000 VA)
+PLN_TARIFF_CLASS=B2
+PLN_CONTRACTED_VA=53000
+PLN_PPN_PERCENT=0.11
 PLN_PPN_PERCENT=0.11
 
 # MQTT Configuration (update with your broker)

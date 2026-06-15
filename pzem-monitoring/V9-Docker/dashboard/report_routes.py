@@ -293,6 +293,86 @@ def report_dashboard():
             color: #666;
             margin-top: 10px;
         }
+
+        .tariff-panel {
+            margin: 0 0 28px;
+            padding: 22px;
+            background: #fffaf0;
+            border: 2px solid #f0d9a8;
+            border-radius: 12px;
+        }
+
+        .tariff-panel h2 {
+            color: #2c3e50;
+            font-size: 1.2rem;
+            margin-bottom: 6px;
+        }
+
+        .tariff-panel .subtitle {
+            color: #666;
+            font-size: 0.9rem;
+            margin-bottom: 16px;
+        }
+
+        .tariff-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+        }
+
+        @media (max-width: 640px) {
+            .tariff-grid { grid-template-columns: 1fr; }
+        }
+
+        .tariff-desc {
+            grid-column: 1 / -1;
+            font-size: 0.85rem;
+            color: #555;
+            background: white;
+            border-radius: 8px;
+            padding: 10px 12px;
+            border: 1px solid #eee;
+        }
+
+        .tariff-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 14px;
+        }
+
+        .tariff-btn {
+            padding: 10px 16px;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .tariff-btn.primary {
+            background: #28a745;
+            color: white;
+        }
+
+        .tariff-btn.secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .tariff-preview-box {
+            margin-top: 14px;
+            padding: 12px;
+            background: white;
+            border-radius: 8px;
+            border: 1px solid #e9ecef;
+            font-size: 0.9rem;
+        }
+
+        .tariff-source {
+            font-size: 0.8rem;
+            color: #888;
+            margin-top: 8px;
+        }
     </style>
 </head>
 <body>
@@ -328,6 +408,40 @@ def report_dashboard():
                 <p>Energy consumption and cost estimation</p>
             </div>
         </div>
+
+        <section class="tariff-panel" id="tariffPanel">
+            <h2><i class="fas fa-bolt"></i> Pengaturan Tarif Listrik PLN</h2>
+            <p class="subtitle">Pilih golongan tarif untuk perhitungan biaya di laporan PDF. Pengaturan disimpan di database.</p>
+            <div class="tariff-grid">
+                <div class="form-group" style="margin-bottom:0">
+                    <label for="tariffClass">Golongan Tarif</label>
+                    <select id="tariffClass"></select>
+                </div>
+                <div class="form-group" style="margin-bottom:0" id="contractedVaGroup">
+                    <label for="contractedVa">Daya Kontrak (VA)</label>
+                    <input type="number" id="contractedVa" min="6600" max="200000" step="100" placeholder="53000">
+                </div>
+                <div class="form-group" style="margin-bottom:0">
+                    <label for="ppnPercent">PPN (%)</label>
+                    <input type="number" id="ppnPercent" min="0" max="100" step="0.1" value="11">
+                </div>
+                <div class="form-group" style="margin-bottom:0">
+                    <label for="previewKwh">Simulasi (kWh)</label>
+                    <input type="number" id="previewKwh" min="0" step="1" value="1000">
+                </div>
+                <div class="tariff-desc" id="tariffDescription">Memuat info tarif...</div>
+            </div>
+            <div class="tariff-actions">
+                <button type="button" class="tariff-btn primary" id="saveTariffBtn">
+                    <i class="fas fa-save"></i> Simpan Pengaturan
+                </button>
+                <button type="button" class="tariff-btn secondary" id="previewTariffBtn">
+                    <i class="fas fa-calculator"></i> Hitung Simulasi
+                </button>
+            </div>
+            <div class="tariff-preview-box" id="tariffPreviewBox" style="display:none"></div>
+            <div class="tariff-source" id="tariffSource"></div>
+        </section>
         
         <form id="reportForm">
             <div class="form-group">
@@ -416,6 +530,118 @@ def report_dashboard():
             const statusDiv = document.getElementById('status');
             const kwhPreview = document.getElementById('kwhPreview');
             let kwhPreviewTimer = null;
+            let tariffOptions = [];
+
+            function formatRp(n) {
+                return 'Rp ' + Number(n || 0).toLocaleString('id-ID', { maximumFractionDigits: 0 });
+            }
+
+            function selectedTariffOption() {
+                const id = document.getElementById('tariffClass').value;
+                return tariffOptions.find(o => o.id === id) || {};
+            }
+
+            function updateTariffUi() {
+                const opt = selectedTariffOption();
+                document.getElementById('tariffDescription').textContent = opt.description || '';
+                document.getElementById('contractedVaGroup').style.display = opt.needs_contracted_va ? 'block' : 'none';
+            }
+
+            async function loadTariffSettings() {
+                try {
+                    const r = await fetch('/api/pln-tariff-settings');
+                    if (!r.ok) return;
+                    const data = await r.json();
+                    tariffOptions = data.options || [];
+                    const sel = document.getElementById('tariffClass');
+                    sel.innerHTML = '';
+                    tariffOptions.forEach(opt => {
+                        const o = document.createElement('option');
+                        o.value = opt.id;
+                        o.textContent = opt.label;
+                        sel.appendChild(o);
+                    });
+                    const s = data.settings || {};
+                    sel.value = s.tariff_class || 'B2';
+                    if (s.contracted_va) document.getElementById('contractedVa').value = s.contracted_va;
+                    document.getElementById('ppnPercent').value = s.ppn_percent_display != null ? s.ppn_percent_display : 11;
+                    document.getElementById('tariffSource').textContent =
+                        'Sumber: ' + (s.source || '-') +
+                        (s.updated_at ? ' · Diperbarui: ' + new Date(s.updated_at).toLocaleString('id-ID') : '');
+                    updateTariffUi();
+                } catch (e) {
+                    console.warn('Could not load tariff settings:', e);
+                }
+            }
+
+            function currentTariffPayload() {
+                return {
+                    tariff_class: document.getElementById('tariffClass').value,
+                    contracted_va: document.getElementById('contractedVa').value || null,
+                    ppn_percent: parseFloat(document.getElementById('ppnPercent').value) / 100
+                };
+            }
+
+            async function previewTariffBill() {
+                const energy = parseFloat(document.getElementById('previewKwh').value) || 0;
+                const box = document.getElementById('tariffPreviewBox');
+                try {
+                    const r = await fetch('/api/pln-tariff-settings/preview', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ energy_kwh: energy, ...currentTariffPayload() })
+                    });
+                    const data = await r.json();
+                    if (!r.ok) throw new Error(data.error || 'Preview gagal');
+                    const b = data.bill;
+                    const bd = b.breakdown || {};
+                    let html = '<strong>Simulasi ' + energy.toLocaleString('id-ID') + ' kWh</strong><br>';
+                    html += 'Biaya pemakaian: ' + formatRp(b.energy_cost_idr) + '<br>';
+                    if (bd.uses_rekening_minimum) {
+                        html += 'Rekening Minimum: ' + formatRp(bd.rekening_minimum_idr) + '<br>';
+                        html += 'Subtotal: ' + formatRp(b.subtotal_idr) + (bd.rm_applied ? ' (RM diterapkan)' : '') + '<br>';
+                    } else {
+                        html += 'Abonemen/RM: ' + formatRp(b.abonemen_idr) + '<br>';
+                        html += 'Subtotal: ' + formatRp(b.subtotal_idr) + '<br>';
+                    }
+                    html += 'PPN (' + b.ppn_percent + '%): ' + formatRp(b.ppn_amount_idr) + '<br>';
+                    html += '<strong>Total tagihan: ' + formatRp(b.total_bill_idr) + '</strong>';
+                    box.innerHTML = html;
+                    box.style.display = 'block';
+                } catch (e) {
+                    box.innerHTML = '<span style="color:#c0392b">' + e.message + '</span>';
+                    box.style.display = 'block';
+                }
+            }
+
+            async function saveTariffSettings() {
+                const btn = document.getElementById('saveTariffBtn');
+                btn.disabled = true;
+                try {
+                    const r = await fetch('/api/pln-tariff-settings', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(currentTariffPayload())
+                    });
+                    const data = await r.json();
+                    if (!r.ok) throw new Error(data.error || 'Gagal menyimpan');
+                    await loadTariffSettings();
+                    statusDiv.style.display = 'block';
+                    statusDiv.className = 'status success';
+                    statusDiv.innerHTML = '<i class="fas fa-check"></i> Pengaturan tarif PLN berhasil disimpan.';
+                } catch (e) {
+                    statusDiv.style.display = 'block';
+                    statusDiv.className = 'status error';
+                    statusDiv.innerHTML = '<i class="fas fa-exclamation-triangle"></i> ' + e.message;
+                } finally {
+                    btn.disabled = false;
+                }
+            }
+
+            document.getElementById('tariffClass').addEventListener('change', updateTariffUi);
+            document.getElementById('saveTariffBtn').addEventListener('click', saveTariffSettings);
+            document.getElementById('previewTariffBtn').addEventListener('click', previewTariffBill);
+            loadTariffSettings();
             
             // Load locations for dropdown
             try {
