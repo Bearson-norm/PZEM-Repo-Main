@@ -50,10 +50,14 @@ jobs:
         tar -czf ${PACKAGE_NAME} \
           dashboard/ \
           mqtt/ \
+          shared/ \
           docker-compose.yml \
           start.sh \
           nginx-pzem.conf \
           setup-nginx-ssl.sh \
+          QUICK_FIX_502.sh \
+          fix-nginx-502.sh \
+          recover-pzem-vps.sh \
           *.md \
           .github/
         
@@ -69,13 +73,12 @@ jobs:
       run: |
         cat > /tmp/remote-deploy-ci.sh << 'REMOTE_SCRIPT'
         #!/bin/bash
-        set -e
+        set -euo pipefail
         
         VPS_DEPLOY_DIR="/opt/pzem-monitoring"
         BACKUP_DIR="/opt/backups/pzem-monitoring"
-        PACKAGE_FILE=$(ls /tmp/pzem-monitoring-deploy-*.tar.gz | head -1)
+        PACKAGE_FILE=$(ls -t /tmp/pzem-monitoring-deploy-*.tar.gz | head -1)
         
-        # Detect docker-compose
         if command -v docker-compose &> /dev/null; then
           DOCKER_COMPOSE="docker-compose"
         elif docker compose version &> /dev/null; then
@@ -86,101 +89,85 @@ jobs:
         fi
         
         echo "🔧 Starting deployment..."
+        mkdir -p "${VPS_DEPLOY_DIR}" "${BACKUP_DIR}"
         
-        # Backup existing (if exists)
-        if [ -d "${VPS_DEPLOY_DIR}" ]; then
-          echo "📦 Creating backup..."
-          mkdir -p "${BACKUP_DIR}"
-          
-          if [ -f "${VPS_DEPLOY_DIR}/docker-compose.yml" ]; then
-            cd "${VPS_DEPLOY_DIR}"
-            
-            # Backup database if container running
-            if docker ps | grep -q "pzem-monitoring.*db\|.*db.*pzem"; then
-              DB_CONTAINER=$(docker ps | grep -E "pzem-monitoring.*db|.*db.*pzem" | awk '{print $1}' | head -1)
-              if [ -n "$DB_CONTAINER" ]; then
-                docker exec ${DB_CONTAINER} pg_dump -U postgres pzem_monitoring > "${BACKUP_DIR}/database_backup_$(date +%Y%m%d_%H%M%S).sql" 2>/dev/null || true
-              fi
-            fi
-            
-            # Backup .env
-            if [ -f "${VPS_DEPLOY_DIR}/.env" ]; then
-              cp "${VPS_DEPLOY_DIR}/.env" "${BACKUP_DIR}/.env.backup.$(date +%Y%m%d_%H%M%S)"
-            fi
-            
-            # Stop services (preserve volumes)
-            $DOCKER_COMPOSE down 2>/dev/null || true
-          fi
-          
-          # Backup directory
-          BACKUP_NAME="${VPS_DEPLOY_DIR}_backup_$(date +%Y%m%d_%H%M%S)"
-          mv "${VPS_DEPLOY_DIR}" "${BACKUP_NAME}" || true
+        # Backup .env sebelum overwrite kode
+        if [ -f "${VPS_DEPLOY_DIR}/.env" ]; then
+          cp "${VPS_DEPLOY_DIR}/.env" "${BACKUP_DIR}/.env.backup.$(date +%Y%m%d_%H%M%S)"
+          echo "✅ .env backed up"
         fi
         
-        # Extract new package
-        echo "📦 Extracting package..."
-        cd /opt
-        tar -xzf "${PACKAGE_FILE}"
-        
-        # Restore .env if exists
-        if [ -f "${BACKUP_DIR}/.env.backup."* ]; then
-          LATEST_ENV=$(ls -t "${BACKUP_DIR}/.env.backup."* | head -1)
-          cp "${LATEST_ENV}" "${VPS_DEPLOY_DIR}/.env"
-          echo "✅ .env restored from backup"
-        else
-          echo "⚠️  No .env backup found - using template"
+        # Backup database jika container db masih jalan (tanpa stop service)
+        if docker ps --format '{{.Names}}' | grep -qE 'db|pzem.*db'; then
+          DB_CONTAINER=$(docker ps --format '{{.Names}}' | grep -E 'db|pzem.*db' | head -1)
+          docker exec "${DB_CONTAINER}" pg_dump -U postgres pzem_monitoring \
+            > "${BACKUP_DIR}/database_backup_$(date +%Y%m%d_%H%M%S).sql" 2>/dev/null || true
         fi
         
-        # Make scripts executable
-        chmod +x ${VPS_DEPLOY_DIR}/*.sh 2>/dev/null || true
+        # Extract langsung ke folder deploy (jangan hapus seluruh direktori)
+        echo "📦 Extracting package to ${VPS_DEPLOY_DIR}..."
+        tar -xzf "${PACKAGE_FILE}" -C "${VPS_DEPLOY_DIR}"
         
-        # Build and start (no cache + force recreate to ensure code changes are applied)
-        echo "🔨 Building containers (no cache)..."
         cd "${VPS_DEPLOY_DIR}"
+        chmod +x *.sh 2>/dev/null || true
+        
+        # Build dulu sambil container lama masih jalan → kurangi downtime
+        echo "🔨 Building containers..."
         $DOCKER_COMPOSE build --no-cache
         
-        echo "🚀 Starting services (force recreate)..."
-        $DOCKER_COMPOSE up -d --force-recreate
+        echo "🚀 Rolling restart (DB volume tetap)..."
+        $DOCKER_COMPOSE up -d --force-recreate --remove-orphans
         
-        # Wait for services
-        echo "⏳ Waiting for services..."
-        sleep 15
-        
-        # Verify database
-        echo "🔍 Verifying database..."
-        MAX_RETRIES=30
-        RETRY_COUNT=0
+        echo "⏳ Waiting for database..."
         DB_READY=false
-        
-        while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+        for i in $(seq 1 30); do
           if $DOCKER_COMPOSE exec -T db pg_isready -U postgres > /dev/null 2>&1; then
             DB_READY=true
             break
           fi
-          RETRY_COUNT=$((RETRY_COUNT + 1))
           sleep 2
         done
-        
-        if [ "$DB_READY" = true ]; then
-          echo "✅ Database is ready"
-        else
+        if [ "$DB_READY" != true ]; then
           echo "❌ Database did not become ready"
+          $DOCKER_COMPOSE logs db --tail=30
+          exit 1
+        fi
+        echo "✅ Database is ready"
+        
+        echo "🏥 Waiting for dashboard (mandatory)..."
+        HEALTH_OK=false
+        for i in $(seq 1 36); do
+          if curl -fsS http://127.0.0.1:5000/health/live > /dev/null 2>&1; then
+            HEALTH_OK=true
+            echo "✅ Dashboard live after $((i * 5))s"
+            break
+          fi
+          echo "   attempt $i/36 — not ready yet..."
+          sleep 5
+        done
+        
+        if [ "$HEALTH_OK" != true ]; then
+          echo "❌ Dashboard health check FAILED — deployment aborted"
+          $DOCKER_COMPOSE ps
+          $DOCKER_COMPOSE logs dashboard --tail=80
           exit 1
         fi
         
-        # Health check
-        echo "🏥 Health check..."
-        sleep 5
-        if curl -f -s http://localhost:5000/health > /dev/null 2>&1; then
-          echo "✅ Health check passed"
+        # Verifikasi readiness penuh (DB + app)
+        if ! curl -fsS http://127.0.0.1:5000/health > /dev/null 2>&1; then
+          echo "⚠️  /health (full) belum OK, tapi /health/live sudah OK — cek log dashboard"
+          $DOCKER_COMPOSE logs dashboard --tail=30
         else
-          echo "⚠️  Health check failed (may still be starting)"
+          echo "✅ Full health check passed"
         fi
         
-        # Cleanup
-        rm -f "${PACKAGE_FILE}"
+        # Reload nginx agar upstream tidak stale
+        if command -v nginx > /dev/null 2>&1 && sudo nginx -t > /dev/null 2>&1; then
+          sudo systemctl reload nginx && echo "✅ Nginx reloaded" || true
+        fi
         
-        echo "✅ Deployment completed!"
+        rm -f "${PACKAGE_FILE}"
+        echo "✅ Deployment completed successfully!"
         REMOTE_SCRIPT
         
         scp -o StrictHostKeyChecking=no /tmp/remote-deploy-ci.sh ${VPS_USER}@${VPS_HOST}:/tmp/
@@ -191,12 +178,14 @@ jobs:
 
     - name: Verify deployment
       run: |
-        ssh -o StrictHostKeyChecking=no ${VPS_USER}@${VPS_HOST} << 'EOF'
-          cd ${VPS_DEPLOY_DIR}
-          docker-compose ps
+        ssh -o StrictHostKeyChecking=no ${VPS_USER}@${VPS_HOST} << EOF
+          set -e
+          cd /opt/pzem-monitoring
+          docker compose ps || docker-compose ps
           echo ""
-          echo "📊 Service Status:"
-          docker-compose ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
+          echo "🏥 Health checks:"
+          curl -fsS http://127.0.0.1:5000/health/live && echo " ✅ /health/live OK"
+          curl -fsS http://127.0.0.1:5000/health && echo " ✅ /health OK" || echo " ⚠️ /health not ready (DB?)"
         EOF
 
     - name: Cleanup local files

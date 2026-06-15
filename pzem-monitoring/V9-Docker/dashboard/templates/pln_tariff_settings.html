@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pengaturan Tarif PLN — PZEM</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .wrap {
+            max-width: 720px;
+            margin: 0 auto;
+            background: rgba(255,255,255,0.97);
+            border-radius: 18px;
+            padding: 28px;
+            box-shadow: 0 16px 40px rgba(0,0,0,0.12);
+        }
+        .nav { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
+        .nav a {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+        h1 {
+            color: #2c3e50;
+            font-size: 1.6rem;
+            margin-bottom: 6px;
+        }
+        .subtitle { color: #666; margin-bottom: 22px; font-size: 0.95rem; }
+        label {
+            display: block;
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 6px;
+            font-size: 0.9rem;
+        }
+        select, input {
+            width: 100%;
+            padding: 11px 14px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 1rem;
+        }
+        select:focus, input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+        @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+        .field { margin-bottom: 0; }
+        .desc {
+            grid-column: 1 / -1;
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 10px;
+            padding: 12px 14px;
+            font-size: 0.88rem;
+            color: #555;
+            line-height: 1.5;
+        }
+        .actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 20px;
+        }
+        .btn {
+            padding: 12px 18px;
+            border: none;
+            border-radius: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 0.95rem;
+        }
+        .btn-primary { background: #28a745; color: #fff; }
+        .btn-secondary { background: #6c757d; color: #fff; }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .preview {
+            margin-top: 16px;
+            padding: 14px;
+            background: #f0f4ff;
+            border-radius: 10px;
+            border: 1px solid #c5d0f5;
+            font-size: 0.9rem;
+            line-height: 1.6;
+            display: none;
+        }
+        .status {
+            margin-top: 16px;
+            padding: 12px;
+            border-radius: 10px;
+            display: none;
+            font-weight: 600;
+        }
+        .status.ok { background: #d4edda; color: #155724; display: block; }
+        .status.err { background: #f8d7da; color: #721c24; display: block; }
+        .meta { margin-top: 12px; font-size: 0.8rem; color: #888; }
+        .info-box {
+            background: #fff8e6;
+            border: 1px solid #f0d9a8;
+            border-radius: 10px;
+            padding: 12px 14px;
+            margin-bottom: 20px;
+            font-size: 0.88rem;
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <nav class="nav">
+            <a href="/"><i class="fas fa-home"></i> Dashboard</a>
+            <a href="/reports"><i class="fas fa-file-pdf"></i> Laporan</a>
+            <a href="/canvas"><i class="fas fa-layer-group"></i> Canvas</a>
+        </nav>
+
+        <h1><i class="fas fa-bolt"></i> Pengaturan Tarif Listrik PLN</h1>
+        <p class="subtitle">Pilih golongan tarif untuk perhitungan biaya energi di laporan PDF.</p>
+
+        <div class="info-box">
+            <strong>Golongan bisnis gedung:</strong> pilih <em>B2 — Bisnis B-2/TR</em>, lalu isi daya kontrak (mis. 53.000 VA).
+            Pengaturan disimpan di database dan langsung dipakai saat generate laporan.
+        </div>
+
+        <div class="grid">
+            <div class="field">
+                <label for="tariffClass">Golongan Tarif</label>
+                <select id="tariffClass"></select>
+            </div>
+            <div class="field" id="contractedVaGroup">
+                <label for="contractedVa">Daya Kontrak (VA)</label>
+                <input type="number" id="contractedVa" min="6600" max="200000" step="100" placeholder="53000">
+            </div>
+            <div class="field">
+                <label for="ppnPercent">PPN (%)</label>
+                <input type="number" id="ppnPercent" min="0" max="100" step="0.1" value="11">
+            </div>
+            <div class="field">
+                <label for="previewKwh">Simulasi konsumsi (kWh)</label>
+                <input type="number" id="previewKwh" min="0" step="1" value="1000">
+            </div>
+            <div class="desc" id="tariffDescription">Memuat info tarif...</div>
+        </div>
+
+        <div class="actions">
+            <button type="button" class="btn btn-primary" id="saveTariffBtn">
+                <i class="fas fa-save"></i> Simpan
+            </button>
+            <button type="button" class="btn btn-secondary" id="previewTariffBtn">
+                <i class="fas fa-calculator"></i> Hitung Simulasi
+            </button>
+        </div>
+
+        <div class="preview" id="tariffPreviewBox"></div>
+        <div class="status" id="statusMsg"></div>
+        <div class="meta" id="tariffSource"></div>
+    </div>
+
+    <script>
+    (function () {
+        let tariffOptions = [];
+
+        function formatRp(n) {
+            return 'Rp ' + Number(n || 0).toLocaleString('id-ID', { maximumFractionDigits: 0 });
+        }
+
+        function selectedOption() {
+            const id = document.getElementById('tariffClass').value;
+            return tariffOptions.find(o => o.id === id) || {};
+        }
+
+        function updateUi() {
+            const opt = selectedOption();
+            document.getElementById('tariffDescription').textContent = opt.description || '';
+            document.getElementById('contractedVaGroup').style.display = opt.needs_contracted_va ? 'block' : 'none';
+        }
+
+        function payload() {
+            return {
+                tariff_class: document.getElementById('tariffClass').value,
+                contracted_va: document.getElementById('contractedVa').value || null,
+                ppn_percent: parseFloat(document.getElementById('ppnPercent').value) / 100
+            };
+        }
+
+        function showStatus(msg, ok) {
+            const el = document.getElementById('statusMsg');
+            el.textContent = msg;
+            el.className = 'status ' + (ok ? 'ok' : 'err');
+        }
+
+        async function loadSettings() {
+            const r = await fetch('/api/pln-tariff-settings');
+            if (!r.ok) throw new Error('Gagal memuat pengaturan (HTTP ' + r.status + ')');
+            const data = await r.json();
+            tariffOptions = data.options || [];
+            const sel = document.getElementById('tariffClass');
+            sel.innerHTML = '';
+            tariffOptions.forEach(opt => {
+                const o = document.createElement('option');
+                o.value = opt.id;
+                o.textContent = opt.label;
+                sel.appendChild(o);
+            });
+            const s = data.settings || {};
+            sel.value = s.tariff_class || 'B2';
+            if (s.contracted_va) document.getElementById('contractedVa').value = s.contracted_va;
+            document.getElementById('ppnPercent').value = s.ppn_percent_display != null ? s.ppn_percent_display : 11;
+            document.getElementById('tariffSource').textContent =
+                'Sumber: ' + (s.source || '-') +
+                (s.updated_at ? ' · Diperbarui: ' + new Date(s.updated_at).toLocaleString('id-ID') : '');
+            updateUi();
+        }
+
+        async function previewBill() {
+            const energy = parseFloat(document.getElementById('previewKwh').value) || 0;
+            const box = document.getElementById('tariffPreviewBox');
+            const r = await fetch('/api/pln-tariff-settings/preview', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ energy_kwh: energy, ...payload() })
+            });
+            const data = await r.json();
+            if (!r.ok) throw new Error(data.error || 'Simulasi gagal');
+            const b = data.bill;
+            const bd = b.breakdown || {};
+            let html = '<strong>Simulasi ' + energy.toLocaleString('id-ID') + ' kWh</strong><br>';
+            html += 'Biaya pemakaian: ' + formatRp(b.energy_cost_idr) + '<br>';
+            if (bd.uses_rekening_minimum) {
+                html += 'Rekening Minimum: ' + formatRp(bd.rekening_minimum_idr) + '<br>';
+                html += 'Subtotal: ' + formatRp(b.subtotal_idr) + (bd.rm_applied ? ' (RM diterapkan)' : '') + '<br>';
+            } else {
+                html += 'Abonemen: ' + formatRp(b.abonemen_idr) + '<br>';
+                html += 'Subtotal: ' + formatRp(b.subtotal_idr) + '<br>';
+            }
+            html += 'PPN (' + b.ppn_percent + '%): ' + formatRp(b.ppn_amount_idr) + '<br>';
+            html += '<strong>Total tagihan: ' + formatRp(b.total_bill_idr) + '</strong>';
+            box.innerHTML = html;
+            box.style.display = 'block';
+        }
+
+        async function saveSettings() {
+            const btn = document.getElementById('saveTariffBtn');
+            btn.disabled = true;
+            try {
+                const r = await fetch('/api/pln-tariff-settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload())
+                });
+                const data = await r.json();
+                if (!r.ok) throw new Error(data.error || 'Gagal menyimpan');
+                await loadSettings();
+                showStatus('Pengaturan tarif PLN berhasil disimpan.', true);
+            } catch (e) {
+                showStatus(e.message, false);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        document.getElementById('tariffClass').addEventListener('change', updateUi);
+        document.getElementById('saveTariffBtn').addEventListener('click', saveSettings);
+        document.getElementById('previewTariffBtn').addEventListener('click', () => previewBill().catch(e => showStatus(e.message, false)));
+
+        loadSettings().catch(e => showStatus(e.message, false));
+    })();
+    </script>
+</body>
+</html>

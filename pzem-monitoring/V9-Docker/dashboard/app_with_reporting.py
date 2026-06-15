@@ -814,6 +814,12 @@ except Exception as bm_err:
     logger.warning("[BRIDGE-MGR] start: %s", bm_err)
 
 # Updated routes with enhanced calculations
+@app.route('/settings/pln-tariff')
+def pln_tariff_settings_page():
+    """Halaman pengaturan golongan tarif listrik PLN."""
+    return render_template('pln_tariff_settings.html')
+
+
 @app.route('/canvas')
 def canvas_monitor():
     """Halaman khusus MQTT tunnel, definisi canvas, dan tampilan snapshot canvas."""
@@ -1208,6 +1214,12 @@ def not_found(error):
 @app.errorhandler(500)
 def internal_error(error):
     return jsonify({'error': 'Internal server error'}), 500
+
+@app.route('/health/live')
+def health_live():
+    """Liveness probe ringan — tanpa query DB (untuk deploy & nginx)."""
+    return jsonify({'status': 'alive', 'timestamp': datetime.now().isoformat()}), 200
+
 
 # Enhanced health check
 @app.route('/health')

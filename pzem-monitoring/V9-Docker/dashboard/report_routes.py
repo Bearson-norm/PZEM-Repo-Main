@@ -380,6 +380,9 @@ def report_dashboard():
         <a href="/" class="back-link">
             <i class="fas fa-arrow-left"></i> Back to Dashboard
         </a>
+        <a href="/settings/pln-tariff" class="back-link" style="margin-left: 16px;">
+            <i class="fas fa-bolt"></i> Pengaturan Tarif PLN
+        </a>
         
         <div class="header">
             <h1><i class="fas fa-file-pdf"></i> Report Generator</h1>
