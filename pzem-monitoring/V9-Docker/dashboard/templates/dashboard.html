@@ -2187,23 +2187,7 @@
                         intersect: false,
                         callbacks: {
                             title: function(context) {
-                                // Format time period for display
-                                const label = context[0].label;
-                                try {
-                                    const date = new Date(label);
-                                    if (!isNaN(date.getTime())) {
-                                        return date.toLocaleString('id-ID', {
-                                            timeZone: 'Asia/Jakarta',
-                                            month: 'short',
-                                            day: 'numeric',
-                                            hour: '2-digit',
-                                            minute: '2-digit'
-                                        });
-                                    }
-                                } catch (e) {
-                                    // Fallback to original label
-                                }
-                                return label;
+                                return formatChartLabel(context[0].label) || context[0].label;
                             }
                         }
                     }
@@ -2216,25 +2200,10 @@
                             maxRotation: 45,
                             minRotation: 45,
                             callback: function(value, index) {
-                                // Format only some labels to avoid clutter
                                 const label = this.getLabelForValue(value);
-                                try {
-                                    const date = new Date(label);
-                                    if (!isNaN(date.getTime())) {
-                                        // Show formatted time for every Nth label
-                                        const showCount = Math.ceil(this.chart.data.labels.length / 10);
-                                        if (index % showCount === 0 || index === this.chart.data.labels.length - 1) {
-                                            return date.toLocaleString('id-ID', {
-                                                timeZone: 'Asia/Jakarta',
-                                                month: 'short',
-                                                day: 'numeric',
-                                                hour: '2-digit',
-                                                minute: '2-digit'
-                                            });
-                                        }
-                                    }
-                                } catch (e) {
-                                    // Fallback to original label
+                                const showCount = Math.ceil(this.chart.data.labels.length / 10);
+                                if (index % showCount === 0 || index === this.chart.data.labels.length - 1) {
+                                    return formatChartLabel(label) || label;
                                 }
                                 return '';
                             }
@@ -2727,22 +2696,20 @@
                 // Update charts with optimized settings
                 addDebugLog(`Updating charts: ${voltageDatasets.length} voltage datasets, ${currentDatasets.length} current datasets, ${powerDatasets.length} power datasets`);
                 
-                const displayLabels = commonLabels.map(label => formatChartLabel(label));
-
                 // Update voltage chart
-                voltageChart.data.labels = displayLabels;
+                voltageChart.data.labels = commonLabels;
                 voltageChart.data.datasets = voltageDatasets;
                 voltageChart.update('none'); // No animation for performance
                 addDebugLog(`Voltage chart updated with ${voltageDatasets.length} datasets, ${commonLabels.length} labels`);
                 
                 // Update current chart
-                currentChart.data.labels = displayLabels;
+                currentChart.data.labels = commonLabels;
                 currentChart.data.datasets = currentDatasets;
                 currentChart.update('none');
                 addDebugLog(`Current chart updated with ${currentDatasets.length} datasets, ${commonLabels.length} labels`);
                 
                 // Update power chart
-                powerChart.data.labels = displayLabels;
+                powerChart.data.labels = commonLabels;
                 powerChart.data.datasets = powerDatasets;
                 powerChart.update('none');
                 addDebugLog(`Power chart updated with ${powerDatasets.length} datasets, ${commonLabels.length} labels`);
