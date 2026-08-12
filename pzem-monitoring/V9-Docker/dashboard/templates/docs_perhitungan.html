@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dokumentasi Perhitungan — PZEM</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #2c3e50;
+            line-height: 1.55;
+        }
+        .wrap {
+            max-width: 960px;
+            margin: 0 auto;
+            background: rgba(255,255,255,0.97);
+            border-radius: 18px;
+            padding: 28px 32px;
+            box-shadow: 0 16px 40px rgba(0,0,0,0.12);
+        }
+        .nav {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+        }
+        .nav a {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+        .nav a.active { color: #2c3e50; }
+        h1 {
+            font-size: 1.65rem;
+            margin-bottom: 6px;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 22px;
+            font-size: 0.95rem;
+        }
+        .toc {
+            background: #f0f4ff;
+            border: 1px solid #c5d0f5;
+            border-radius: 12px;
+            padding: 14px 18px;
+            margin-bottom: 28px;
+        }
+        .toc strong {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 0.9rem;
+        }
+        .toc ol {
+            margin-left: 1.2rem;
+            font-size: 0.92rem;
+        }
+        .toc a {
+            color: #4a5fc1;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        .toc a:hover { text-decoration: underline; }
+        section {
+            margin-bottom: 32px;
+            padding-top: 4px;
+        }
+        section h2 {
+            font-size: 1.25rem;
+            color: #2c3e50;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #e8ecf8;
+        }
+        section h3 {
+            font-size: 1.05rem;
+            margin: 16px 0 8px;
+            color: #34495e;
+        }
+        p, li { font-size: 0.94rem; color: #444; }
+        p { margin-bottom: 10px; }
+        ul, ol { margin: 0 0 12px 1.25rem; }
+        li { margin-bottom: 6px; }
+        .flow {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+            margin: 14px 0 6px;
+        }
+        .flow-step {
+            background: #f8f9fa;
+            border: 1px solid #e0e4ef;
+            border-radius: 10px;
+            padding: 10px 14px;
+            font-size: 0.86rem;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+        .flow-step i { color: #667eea; margin-right: 6px; }
+        .flow-arrow {
+            color: #99a3c4;
+            font-size: 0.85rem;
+        }
+        .formula {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 10px;
+            padding: 12px 14px;
+            font-family: Consolas, 'Courier New', monospace;
+            font-size: 0.88rem;
+            margin: 10px 0 14px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            color: #1a1a2e;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 12px 0 16px;
+            font-size: 0.88rem;
+        }
+        th, td {
+            border: 1px solid #e0e4ef;
+            padding: 10px 12px;
+            text-align: left;
+            vertical-align: top;
+        }
+        th {
+            background: #f0f4ff;
+            color: #2c3e50;
+            font-weight: 700;
+        }
+        tr:nth-child(even) td { background: #fafbff; }
+        .info-box {
+            background: #fff8e6;
+            border: 1px solid #f0d9a8;
+            border-radius: 10px;
+            padding: 12px 14px;
+            margin: 12px 0 16px;
+            font-size: 0.88rem;
+            color: #555;
+        }
+        .example {
+            background: #f0fff4;
+            border: 1px solid #b7e4c7;
+            border-radius: 10px;
+            padding: 14px 16px;
+            margin: 12px 0;
+            font-size: 0.9rem;
+        }
+        .example h4 {
+            margin-bottom: 8px;
+            color: #1b4332;
+            font-size: 0.95rem;
+        }
+        .example .formula {
+            background: #fff;
+            border-color: #d8f3dc;
+        }
+        .cta {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+            padding: 11px 16px;
+            background: #e67e22;
+            color: #fff;
+            border-radius: 10px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 0.92rem;
+        }
+        .cta:hover { background: #d35400; }
+        .priority {
+            counter-reset: method;
+            list-style: none;
+            margin-left: 0;
+        }
+        .priority li {
+            counter-increment: method;
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 12px 14px;
+            margin-bottom: 8px;
+            border-left: 4px solid #667eea;
+        }
+        .priority li::before {
+            content: "Metode " counter(method) " — ";
+            font-weight: 700;
+            color: #667eea;
+        }
+        @media (max-width: 640px) {
+            .wrap { padding: 20px 16px; }
+            .flow-arrow { display: none; }
+            .flow-step { width: 100%; }
+            table { display: block; overflow-x: auto; }
+        }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <nav class="nav">
+            <a href="/"><i class="fas fa-home"></i> Dashboard</a>
+            <a href="/reports"><i class="fas fa-file-pdf"></i> Laporan</a>
+            <a href="/canvas"><i class="fas fa-layer-group"></i> Canvas</a>
+            <a href="/settings/pln-tariff"><i class="fas fa-bolt"></i> Tarif PLN</a>
+            <a href="/docs/perhitungan" class="active"><i class="fas fa-book"></i> Dokumentasi</a>
+        </nav>
+
+        <h1><i class="fas fa-calculator"></i> Dokumentasi Perhitungan Listrik &amp; Tagihan</h1>
+        <p class="subtitle">
+            Cara sistem PZEM Monitoring menghitung data listrik periode dan tagihan PLN
+            (selaras dengan rumus di aplikasi).
+        </p>
+
+        <nav class="toc" aria-label="Daftar isi">
+            <strong><i class="fas fa-list"></i> Daftar Isi</strong>
+            <ol>
+                <li><a href="#alur">Alur data singkat</a></li>
+                <li><a href="#daya">Data listrik &amp; daya 3 fasa</a></li>
+                <li><a href="#energi">Energi periode (kWh)</a></li>
+                <li><a href="#tarif">Tarif &amp; tagihan PLN</a></li>
+                <li><a href="#contoh">Contoh angka</a></li>
+                <li><a href="#pengaturan">Di mana mengubah tarif</a></li>
+            </ol>
+        </nav>
+
+        <section id="alur">
+            <h2><i class="fas fa-project-diagram"></i> 1. Alur data singkat</h2>
+            <div class="flow">
+                <div class="flow-step"><i class="fas fa-microchip"></i> Sensor PZEM</div>
+                <span class="flow-arrow"><i class="fas fa-arrow-right"></i></span>
+                <div class="flow-step"><i class="fas fa-broadcast-tower"></i> MQTT</div>
+                <span class="flow-arrow"><i class="fas fa-arrow-right"></i></span>
+                <div class="flow-step"><i class="fas fa-database"></i> Database</div>
+                <span class="flow-arrow"><i class="fas fa-arrow-right"></i></span>
+                <div class="flow-step"><i class="fas fa-chart-line"></i> Agregasi kWh</div>
+                <span class="flow-arrow"><i class="fas fa-arrow-right"></i></span>
+                <div class="flow-step"><i class="fas fa-file-invoice-dollar"></i> Kalkulator PLN</div>
+                <span class="flow-arrow"><i class="fas fa-arrow-right"></i></span>
+                <div class="flow-step"><i class="fas fa-file-pdf"></i> Laporan PDF</div>
+            </div>
+            <p>
+                Tegangan, arus, daya, energi, frekuensi, dan faktor daya diukur langsung oleh PZEM-004T.
+                Sistem menyimpan riwayat, menghitung konsumsi periode, lalu menerapkan tarif PLN untuk tagihan.
+            </p>
+        </section>
+
+        <section id="daya">
+            <h2><i class="fas fa-bolt"></i> 2. Data listrik &amp; daya 3 fasa</h2>
+            <p>Nilai berikut diukur sensor (bukan dihitung ulang dari rumus lain):</p>
+            <ul>
+                <li><strong>V</strong> — tegangan (Volt)</li>
+                <li><strong>I</strong> — arus (Ampere)</li>
+                <li><strong>P</strong> — daya aktif (Watt)</li>
+                <li><strong>E</strong> — energy counter kumulatif (kWh)</li>
+                <li><strong>f</strong> — frekuensi (Hz)</li>
+                <li><strong>PF</strong> — faktor daya (0–1)</li>
+            </ul>
+
+            <h3>Turunan per fasa</h3>
+            <div class="formula">S = V × I                    (daya semu, VA)
+Q = S × sin(arccos(PF))     (daya reaktif, VAR)</div>
+
+            <h3>Total 3 fasa (R + S + T)</h3>
+            <div class="formula">P_tot = P_R + P_S + P_T
+S_tot = S_R + S_S + S_T
+PF_sistem = P_tot / S_tot   (jika S_tot &gt; 0)</div>
+
+            <h3>Ketidakseimbangan beban (imbalance)</h3>
+            <div class="formula">imbalance_% = (σ / μ) × 100</div>
+            <p>
+                Dihitung dari standar deviasi (σ) dan rata-rata (μ) daya, arus, atau tegangan antar fasa.
+            </p>
+        </section>
+
+        <section id="energi">
+            <h2><i class="fas fa-battery-full"></i> 3. Energi periode (kWh)</h2>
+            <p>
+                Untuk setiap perangkat di rentang waktu laporan, konsumsi dihitung dengan prioritas berikut
+                (metode berikutnya dipakai hanya jika yang sebelumnya tidak valid):
+            </p>
+            <ol class="priority">
+                <li>
+                    <strong>Delta energy counter</strong> (utama):
+                    <div class="formula">E = max(energy) − min(energy)</div>
+                    Dipakai jika E ≥ 0, E &lt; 10.000 kWh, dan ada lebih dari satu sampel.
+                </li>
+                <li>
+                    <strong>Integral trapesium daya</strong> (cadangan):
+                    <div class="formula">E_kWh = Σ  ((P_t + P_t−1) / 2) × (Δt_detik / 3.600.000)</div>
+                </li>
+                <li>
+                    <strong>Rata-rata daya × durasi</strong> (terakhir):
+                    <div class="formula">E_kWh = AVG(P) × (t_max − t_min) / 3.600.000</div>
+                </li>
+            </ol>
+            <div class="info-box">
+                <strong>Total untuk tagihan:</strong> jumlah <code>energy_kwh</code> semua perangkat dalam lokasi/periode
+                (untuk 3 fasa: R + S + T). Nilai inilah yang masuk ke kalkulator PLN.
+            </div>
+        </section>
+
+        <section id="tarif">
+            <h2><i class="fas fa-money-bill-wave"></i> 4. Tarif &amp; tagihan PLN</h2>
+            <p>Golongan yang didukung aplikasi:</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Golongan</th>
+                        <th>Model</th>
+                        <th>Tarif</th>
+                        <th>Biaya tetap / RM</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>R1</strong></td>
+                        <td>Blok</td>
+                        <td>0–900 kWh @ Rp 1.352<br>&gt;900 kWh @ Rp 1.445</td>
+                        <td>Abonemen Rp 11.000</td>
+                    </tr>
+                    <tr>
+                        <td><strong>R2</strong></td>
+                        <td>Blok</td>
+                        <td>0–1.300 kWh @ Rp 1.352<br>&gt;1.300 kWh @ Rp 1.445</td>
+                        <td>Abonemen Rp 20.000</td>
+                    </tr>
+                    <tr>
+                        <td><strong>B2</strong> (default)</td>
+                        <td>Flat + Rekening Minimum</td>
+                        <td>Rp 1.444,7 / kWh</td>
+                        <td>RM = 40 × kVA × 1.444,7<br>(kVA dari daya kontrak, default 53.000 VA)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>I3</strong></td>
+                        <td>Flat</td>
+                        <td>Rp 1.699 / kWh</td>
+                        <td>Abonemen Rp 40.000</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>R1 / R2 (tarif blok)</h3>
+            <div class="formula">E1 = min(E, ambang_blok1)
+E2 = max(0, E − ambang_blok1)
+Biaya_energi = E1 × tarif1 + E2 × tarif2
+Subtotal = Biaya_energi + Abonemen
+PPN = Subtotal × 11%
+Total = Subtotal + PPN</div>
+
+            <h3>B2 — Bisnis B-2/TR (flat + rekening minimum)</h3>
+            <div class="formula">Biaya_energi = E × 1.444,7
+kVA = daya_kontrak_VA / 1.000
+RM = 40 × kVA × 1.444,7
+Subtotal = max(Biaya_energi, RM)
+Total = Subtotal × (1 + PPN)</div>
+            <p>
+                Jika konsumsi rendah, tagihan mengikuti <em>Rekening Minimum</em>, bukan hanya kWh terpakai.
+            </p>
+
+            <h3>I3 (flat + abonemen)</h3>
+            <div class="formula">Subtotal = (E × 1.699) + 40.000
+Total = Subtotal × (1 + PPN)</div>
+
+            <div class="info-box">
+                PPN default <strong>11%</strong> (dapat diubah di pengaturan tarif).
+                Golongan default sistem: <strong>B2</strong>.
+            </div>
+        </section>
+
+        <section id="contoh">
+            <h2><i class="fas fa-lightbulb"></i> 5. Contoh angka</h2>
+
+            <div class="example">
+                <h4>Contoh A — R1, konsumsi 1.200 kWh</h4>
+                <div class="formula">Blok 1: 900 × 1.352 = Rp 1.216.800
+Blok 2: 300 × 1.445 = Rp 433.500
+Biaya energi = Rp 1.650.300
+Subtotal = 1.650.300 + 11.000 = Rp 1.661.300
+PPN 11% = Rp 182.743
+Total tagihan = Rp 1.844.043</div>
+            </div>
+
+            <div class="example">
+                <h4>Contoh B — B2, daya kontrak 53.000 VA, konsumsi 1.000 kWh</h4>
+                <div class="formula">Biaya energi = 1.000 × 1.444,7 = Rp 1.444.700
+kVA = 53
+RM = 40 × 53 × 1.444,7 = Rp 3.062.764
+Subtotal = max(1.444.700, 3.062.764) = Rp 3.062.764  ← RM berlaku
+PPN 11% ≈ Rp 336.904
+Total tagihan ≈ Rp 3.399.668</div>
+            </div>
+
+            <div class="example">
+                <h4>Contoh C — B2, daya kontrak 53.000 VA, konsumsi 3.000 kWh</h4>
+                <div class="formula">Biaya energi = 3.000 × 1.444,7 = Rp 4.334.100
+RM = Rp 3.062.764
+Subtotal = max(4.334.100, 3.062.764) = Rp 4.334.100  ← energi di atas RM
+PPN 11% ≈ Rp 476.751
+Total tagihan ≈ Rp 4.810.851</div>
+            </div>
+        </section>
+
+        <section id="pengaturan">
+            <h2><i class="fas fa-cog"></i> 6. Di mana mengubah tarif</h2>
+            <p>
+                Golongan tarif, daya kontrak (untuk B2), dan PPN diatur di halaman
+                <strong>Pengaturan Tarif PLN</strong>. Nilai disimpan di database dan langsung dipakai
+                saat generate laporan PDF serta simulasi hitung di halaman tersebut.
+            </p>
+            <a class="cta" href="/settings/pln-tariff">
+                <i class="fas fa-bolt"></i> Buka Pengaturan Tarif PLN
+            </a>
+        </section>
+    </div>
+</body>
+</html>

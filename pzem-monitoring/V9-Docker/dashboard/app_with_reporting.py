@@ -697,14 +697,43 @@ class DatabaseManager:
                         device_data['building'] = device_data['location']
                         device_data['building_id'] = device_data['location']
                     
-                    # Extract phase from device_name if available
-                    device_name = device_data.get('device_name', '')
+                    # Extract phase / phase_type from name + address (1-phase vs 3-phase R/S/T)
+                    device_name = device_data.get('device_name', '') or ''
+                    addr_upper = str(device_address).upper()
+                    name_upper = device_name.upper()
+                    phase = None
+
                     if device_name:
-                        # Try to extract phase from device name (e.g., "Phase S - CKPG5")
                         phase_match = re.search(r'Phase\s+([RST])', device_name, re.IGNORECASE)
                         if phase_match:
-                            device_data['phase'] = phase_match.group(1).upper()
-                            device_data['phase_id'] = phase_match.group(1).upper()
+                            phase = phase_match.group(1).upper()
+
+                    if not phase:
+                        if addr_upper.endswith('-R') or addr_upper.endswith('_R'):
+                            phase = 'R'
+                        elif addr_upper.endswith('-S') or addr_upper.endswith('_S'):
+                            phase = 'S'
+                        elif addr_upper.endswith('-T') or addr_upper.endswith('_T'):
+                            phase = 'T'
+
+                    single_hint = bool(re.search(
+                        r'(1[\s_-]?phase|single[\s_-]?phase|1[\s_-]?fasa|single[\s_-]?fasa)',
+                        f'{device_name} {device_address}',
+                        re.IGNORECASE
+                    ))
+
+                    if phase in ('R', 'S', 'T'):
+                        device_data['phase'] = phase
+                        device_data['phase_id'] = phase
+                        device_data['phase_type'] = 'three'
+                        device_data['phase_detail'] = '3phase'
+                    else:
+                        # No R/S/T identity → 1-phase meter detail for dashboard layout
+                        device_data['phase_type'] = 'single'
+                        device_data['phase_detail'] = '1phase'
+                        if single_hint:
+                            device_data['phase'] = '1'
+                            device_data['phase_id'] = '1'
                     
                     # Serialize data
                     serialized_data = self.serialize_data(device_data)
@@ -818,6 +847,12 @@ except Exception as bm_err:
 def pln_tariff_settings_page():
     """Halaman pengaturan golongan tarif listrik PLN."""
     return render_template('pln_tariff_settings.html')
+
+
+@app.route('/docs/perhitungan')
+def docs_perhitungan_page():
+    """Dokumentasi cara menghitung data listrik periode dan tagihan PLN."""
+    return render_template('docs_perhitungan.html')
 
 
 @app.route('/canvas')
