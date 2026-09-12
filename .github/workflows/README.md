@@ -57,23 +57,32 @@ Jika tidak ingin menggunakan SSH key, Anda bisa memodifikasi workflow untuk meng
 
 **Jobs:**
 - **test**: Linting, unit tests, database connection test
-- **build**: Build Docker images untuk dashboard dan MQTT client
+- **build**: Build Docker images untuk dashboard dan MQTT client (dengan cache)
 - **security**: Vulnerability scanning dengan Trivy
+- **ci-success**: Gate job untuk memastikan semua job berhasil sebelum trigger CD
 
 ### 2. CD Workflow (`deploy.yml`)
 
 **Trigger:**
-- Push ke branch `main` atau `master`
-- Manual trigger via `workflow_dispatch` dengan pilihan environment
+- ✅ **Otomatis setelah CI berhasil** (menggunakan `workflow_run` trigger)
+- Manual trigger via `workflow_dispatch` dengan pilihan environment dan skip CI check
 
 **Jobs:**
+- **check-ci-status**: Verifikasi bahwa CI workflow berhasil sebelum deploy
 - **deploy**: 
   - Membuat deployment package
   - Upload ke VPS
   - Backup existing deployment
   - Extract dan deploy
-  - Build dan start Docker containers
+  - Build dan start Docker containers (dengan cache untuk kecepatan)
   - Verify deployment
+
+**Optimasi:**
+- ✅ CD hanya berjalan setelah CI sukses (mencegah deployment kode yang gagal test)
+- ✅ Docker build menggunakan cache (lebih cepat)
+- ✅ Sleep times dikurangi (10s → 3-5s)
+- ✅ Retry mechanism dioptimasi (hanya untuk critical steps)
+- ✅ Verifikasi yang tidak perlu dihapus
 
 **Deployment Path:**
 - VPS User: `foom`
@@ -86,15 +95,19 @@ Jika tidak ingin menggunakan SSH key, Anda bisa memodifikasi workflow untuk meng
 
 1. Push ke branch `main` atau `master`
 2. CI workflow akan berjalan otomatis
-3. Jika CI berhasil, CD workflow akan deploy ke VPS
+3. ✅ **CD workflow akan otomatis ter-trigger setelah CI berhasil** (menggunakan `workflow_run`)
+4. Deployment ke VPS akan berjalan hanya jika semua test dan build berhasil
 
 ### Manual Deployment
 
 1. Pergi ke **Actions** tab di GitHub
 2. Pilih workflow **CD - Deploy to Production VPS**
 3. Klik **Run workflow**
-4. Pilih branch dan environment
+4. Pilih branch, environment, dan opsi:
+   - **skip_ci_check**: Set `true` untuk skip CI check (emergency deployment)
 5. Klik **Run workflow**
+
+**Note:** Manual deployment tetap akan check CI status kecuali `skip_ci_check=true`
 
 ## 🔍 Monitoring
 

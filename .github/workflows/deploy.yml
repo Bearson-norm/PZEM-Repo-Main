@@ -122,8 +122,8 @@ jobs:
         # Note: --exclude options must come before files/directories
         cd ${PROJECT_DIR}
         
-        # Build list of files to include
-        FILES_TO_INCLUDE="dashboard/ mqtt/ docker-compose.yml"
+        # Build list of files to include (shared/ required by Dockerfiles COPY shared)
+        FILES_TO_INCLUDE="dashboard/ mqtt/ shared/ docker-compose.yml"
         
         # Add important files if they exist
         [ -f "start.sh" ] && FILES_TO_INCLUDE="$FILES_TO_INCLUDE start.sh"
@@ -144,6 +144,27 @@ jobs:
           exit 1
         fi
         echo "✅ dashboard.html verified"
+
+        if [ ! -f "shared/pzem_ingest.py" ]; then
+          echo "❌ ERROR: shared/pzem_ingest.py not found!"
+          exit 1
+        fi
+        echo "✅ shared module verified"
+
+        for required in \
+          dashboard/pln_reconcile.py \
+          dashboard/pln_match_routes.py \
+          dashboard/templates/pln_bill_match.html \
+          dashboard/migrations/004_pln_bill_match.sql \
+          shared/schema.py \
+          shared/sql/004_pln_bill_match.sql
+        do
+          if [ ! -f "$required" ]; then
+            echo "❌ ERROR: $required not found!"
+            exit 1
+          fi
+        done
+        echo "✅ PLN bill-match files verified"
         
         # Create tar archive with excludes before files
         tar -czf ../../${PACKAGE_NAME} \
@@ -158,7 +179,11 @@ jobs:
         
         # Quick package verification
         PACKAGE_SIZE=$(wc -c < ../../${PACKAGE_NAME})
-        if [ "$PACKAGE_SIZE" -lt 10000 ] || ! tar -tzf ../../${PACKAGE_NAME} | grep -q "dashboard/templates/dashboard.html"; then
+        if [ "$PACKAGE_SIZE" -lt 10000 ] \
+          || ! tar -tzf ../../${PACKAGE_NAME} | grep -q "dashboard/templates/dashboard.html" \
+          || ! tar -tzf ../../${PACKAGE_NAME} | grep -q "shared/pzem_ingest.py" \
+          || ! tar -tzf ../../${PACKAGE_NAME} | grep -q "dashboard/templates/pln_bill_match.html" \
+          || ! tar -tzf ../../${PACKAGE_NAME} | grep -q "dashboard/migrations/004_pln_bill_match.sql"; then
           echo "❌ Package verification failed!"
           exit 1
         fi
@@ -243,28 +268,44 @@ jobs:
             echo "✅ Services stopped"
           fi
           
-          # Backup directory
-          BACKUP_NAME="${VPS_DEPLOY_DIR}_backup_$(date +%Y%m%d_%H%M%S)"
-          echo "📦 Backing up directory to ${BACKUP_NAME}..."
-          mv "${VPS_DEPLOY_DIR}" "${BACKUP_NAME}" || true
+          # Code backup to home (avoids /opt permission issues on mv)
+          if [ -n "${BACKUP_DIR}" ]; then
+            CODE_BACKUP="${BACKUP_DIR}/code_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
+            echo "📦 Archiving current deployment to ${CODE_BACKUP}..."
+            tar -czf "${CODE_BACKUP}" -C "$(dirname "${VPS_DEPLOY_DIR}")" "$(basename "${VPS_DEPLOY_DIR}")" 2>/dev/null || \
+              sudo tar -czf "${CODE_BACKUP}" -C "$(dirname "${VPS_DEPLOY_DIR}")" "$(basename "${VPS_DEPLOY_DIR}")" || \
+              echo "⚠️  Code archive skipped (non-critical)"
+          fi
         fi
         
-        # Extract new package
+        # Extract into clean directory
         echo "📦 Extracting package..."
-        mkdir -p "${VPS_DEPLOY_DIR}"
-        cd "${VPS_DEPLOY_DIR}"
-        tar -xzf "${PACKAGE_FILE}"
+        EXTRACT_DIR=$(mktemp -d)
+        tar -xzf "${PACKAGE_FILE}" -C "${EXTRACT_DIR}"
         
-        # Quick file verification
-        if [ ! -f "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html" ] || [ "$(wc -c < "${VPS_DEPLOY_DIR}/dashboard/templates/dashboard.html")" -lt 1000 ]; then
+        # Quick file verification before swap
+        if [ ! -f "${EXTRACT_DIR}/dashboard/templates/dashboard.html" ] || [ "$(wc -c < "${EXTRACT_DIR}/dashboard/templates/dashboard.html")" -lt 1000 ]; then
           echo "❌ ERROR: dashboard.html missing or invalid!"
+          rm -rf "${EXTRACT_DIR}"
           exit 1
         fi
-        echo "✅ Files extracted and verified"
+        if [ ! -f "${EXTRACT_DIR}/shared/pzem_ingest.py" ]; then
+          echo "❌ ERROR: shared/pzem_ingest.py missing from package!"
+          rm -rf "${EXTRACT_DIR}"
+          exit 1
+        fi
+        echo "✅ Package contents verified"
+
+        mkdir -p "${VPS_DEPLOY_DIR}" 2>/dev/null || sudo mkdir -p "${VPS_DEPLOY_DIR}"
+        sudo rm -rf "${VPS_DEPLOY_DIR:?}"/* 2>/dev/null || rm -rf "${VPS_DEPLOY_DIR:?}"/* 2>/dev/null || true
+        cp -a "${EXTRACT_DIR}/." "${VPS_DEPLOY_DIR}/" 2>/dev/null || sudo cp -a "${EXTRACT_DIR}/." "${VPS_DEPLOY_DIR}/"
+        rm -rf "${EXTRACT_DIR}"
+        cd "${VPS_DEPLOY_DIR}"
+        echo "✅ Files deployed to ${VPS_DEPLOY_DIR}"
         
-        # Restore .env if exists and backup directory is available
-        if [ -n "${BACKUP_DIR}" ] && [ -f "${BACKUP_DIR}/.env.backup."* ] 2>/dev/null; then
-          LATEST_ENV=$(ls -t "${BACKUP_DIR}/.env.backup."* 2>/dev/null | head -1)
+        # Restore .env from backup
+        if [ -n "${BACKUP_DIR}" ]; then
+          LATEST_ENV=$(ls -t "${BACKUP_DIR}"/.env.backup.* 2>/dev/null | head -1)
           if [ -n "${LATEST_ENV}" ] && [ -f "${LATEST_ENV}" ]; then
             cp "${LATEST_ENV}" "${VPS_DEPLOY_DIR}/.env"
             echo "✅ .env restored from backup"
@@ -277,6 +318,11 @@ jobs:
         
         # Make scripts executable
         chmod +x ${VPS_DEPLOY_DIR}/*.sh 2>/dev/null || true
+
+        if [ ! -d "${VPS_DEPLOY_DIR}/shared" ] || [ ! -f "${VPS_DEPLOY_DIR}/shared/pzem_ingest.py" ]; then
+          echo "❌ ERROR: shared/ missing on VPS before build"
+          exit 1
+        fi
         
         # Ensure dashboard template files have correct permissions
         echo "🔧 Setting correct permissions for dashboard files..."
@@ -317,6 +363,18 @@ jobs:
           echo "✅ Health check passed"
         else
           echo "⚠️  Health check pending (service may still be starting)"
+        fi
+
+        if curl -f -s -o /dev/null http://localhost:5000/pln-match; then
+          echo "✅ /pln-match is reachable"
+        else
+          echo "⚠️  /pln-match not ready yet"
+        fi
+
+        if $DOCKER_COMPOSE exec -T db psql -U postgres -d pzem_monitoring -c "SELECT to_regclass('public.pln_readings');" | grep -q pln_readings; then
+          echo "✅ pln_readings migration present"
+        else
+          echo "⚠️  pln_readings table not visible yet (dashboard applies 004 on startup)"
         fi
         
         # Cleanup
@@ -378,4 +436,5 @@ jobs:
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### Access URLs" >> $GITHUB_STEP_SUMMARY
         echo "- Dashboard: http://${{ env.VPS_HOST }}:5000" >> $GITHUB_STEP_SUMMARY
+        echo "- PLN kWh match: http://${{ env.VPS_HOST }}:5000/pln-match" >> $GITHUB_STEP_SUMMARY
         echo "- Health: http://${{ env.VPS_HOST }}:5000/health" >> $GITHUB_STEP_SUMMARY

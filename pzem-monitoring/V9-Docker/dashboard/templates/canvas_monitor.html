@@ -504,6 +504,7 @@
             <nav class="header-links" aria-label="Navigasi utama">
                 <a href="/" title="Dashboard"><i class="fas fa-home"></i><span> Utama</span></a>
                 <a href="/reports" title="Laporan"><i class="fas fa-file-pdf"></i><span> Laporan</span></a>
+                <a href="/pln-match" title="Cocokkan kWh PLN"><i class="fas fa-balance-scale"></i><span> kWh PLN</span></a>
                 <a href="/settings/pln-tariff" title="Tarif PLN"><i class="fas fa-bolt"></i><span> Tarif</span></a>
                 <a href="/docs/perhitungan" title="Dokumentasi perhitungan"><i class="fas fa-book"></i><span> Docs</span></a>
                 <a href="/canvas" class="active" title="Canvas"><i class="fas fa-layer-group"></i><span> Canvas</span></a>
@@ -602,7 +603,7 @@
                         <div class="field"><label for="bridgePort">Port</label><input type="number" id="bridgePort" value="1883" inputmode="numeric" /></div>
                         <div class="field"><label for="bridgeQos">QoS</label><input type="number" id="bridgeQos" value="1" min="0" max="2" inputmode="numeric" /></div>
                     </div>
-                    <div class="field"><label for="bridgeTopics">Topik (JSON)</label><textarea id="bridgeTopics">["energy/3phase/+/phase/+/data"]</textarea></div>
+                    <div class="field"><label for="bridgeTopics">Topik (JSON)</label><textarea id="bridgeTopics">["energy/3phase/+/phase/+/data","energy/3phase/+/phase/+/status","energy/3phase/+/phase/+/heartbeat"]</textarea></div>
                     <div class="field"><label for="bridgeUser">Username</label><input type="text" id="bridgeUser" autocomplete="username" /></div>
                     <div class="field"><label for="bridgePass">Password</label><input type="password" id="bridgePass" placeholder="Kosong = tidak diubah" autocomplete="new-password" /></div>
                     <label class="inline-chk"><input type="checkbox" id="bridgeTls" /> TLS</label>
@@ -945,7 +946,7 @@
         function resetBridgeForm() {
             ['bridgeEditId','bridgeName','bridgeHost','bridgeUser','bridgePass'].forEach(id => document.getElementById(id).value = '');
             document.getElementById('bridgePort').value = '1883'; document.getElementById('bridgeQos').value = '1';
-            document.getElementById('bridgeTopics').value = '["energy/3phase/+/phase/+/data"]';
+            document.getElementById('bridgeTopics').value = '["energy/3phase/+/phase/+/data","energy/3phase/+/phase/+/status","energy/3phase/+/phase/+/heartbeat"]';
             document.getElementById('bridgeTls').checked = false; document.getElementById('bridgeEnabled').checked = true;
         }
         async function saveBridge() {

@@ -88,6 +88,12 @@ jobs:
         cd dashboard
         python -c "from report_generator import ThreePhaseCalculator, DatabaseManager, ReportGenerator; print('✅ All imports successful')"
 
+    - name: Test PLN bill matching
+      working-directory: pzem-monitoring/V9-Docker
+      run: |
+        PYTHONPATH=dashboard:. python -c "from pln_reconcile import reconcile_period; from shared.pzem_ingest import persist_mqtt_message; print('✅ PLN match imports successful')"
+        PYTHONPATH=dashboard:. python -m pytest tests -q
+
     - name: Test MQTT Client imports
       working-directory: pzem-monitoring/V9-Docker
       run: |

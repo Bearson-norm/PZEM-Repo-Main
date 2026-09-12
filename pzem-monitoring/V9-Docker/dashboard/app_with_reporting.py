@@ -39,6 +39,7 @@ JAKARTA_TZ = pytz.timezone('Asia/Jakarta')
 from report_routes import report_bp
 from config_routes import config_bp
 from mqtt_bridge import MqttBridgeManager
+from pln_match_routes import pln_match_bp
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key_here'
@@ -48,6 +49,7 @@ socketio = SocketIO(app, cors_allowed_origins="*", logger=False)
 # Register report blueprint
 app.register_blueprint(report_bp)
 app.register_blueprint(config_bp)
+app.register_blueprint(pln_match_bp)
 
 # Setup logging with Windows compatibility
 logging.basicConfig(
@@ -186,7 +188,12 @@ class DatabaseManager:
     def ensure_mqtt_canvas_schema(self):
         """Apply migrations/001_mqtt_canvas.sql if present (idempotent)."""
         mig_dir = os.path.join(os.path.dirname(__file__), "migrations")
-        for fname in ("001_mqtt_canvas.sql", "002_mqtt_bridge_name_unique.sql", "003_pln_tariff_settings.sql"):
+        for fname in (
+            "001_mqtt_canvas.sql",
+            "002_mqtt_bridge_name_unique.sql",
+            "003_pln_tariff_settings.sql",
+            "004_pln_bill_match.sql",
+        ):
             path = os.path.join(mig_dir, fname)
             if not os.path.isfile(path):
                 logger.warning("[SCHEMA] Migration not found: %s", path)

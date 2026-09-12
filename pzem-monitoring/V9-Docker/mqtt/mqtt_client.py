@@ -29,9 +29,12 @@ import pytz
 from shared.pzem_ingest import (
     enrich_payload_from_topic,
     decode_json_payload,
+    persist_mqtt_message,
     persist_pzem_reading,
     DEFAULT_DEVICE_BUILDING_MAP,
+    DEFAULT_MQTT_TOPICS,
 )
+from shared.schema import apply_pln_bill_match_schema
 
 # Jakarta timezone for local time handling
 JAKARTA_TZ = pytz.timezone('Asia/Jakarta')
@@ -39,11 +42,7 @@ JAKARTA_TZ = pytz.timezone('Asia/Jakarta')
 # MQTT Configuration
 MQTT_BROKER = "103.87.67.139"
 MQTT_PORT = 1883
-MQTT_TOPICS = [
-    "energy/3phase/+/phase/+/data",   # Standard: energy/3phase/{site}/phase/{R|S|T}/data
-    "energy/3phase/+/+/phase/+/data",  # Extended: energy/3phase/{parent}/{child}/phase/{R|S|T}/data
-    "energy/pzem/data"  # Direct PZEM data topic
-]
+MQTT_TOPICS = list(DEFAULT_MQTT_TOPICS)
 MQTT_QOS = 1
 
 # Device address to building mapping (alias shared default)
@@ -187,6 +186,7 @@ class PZEMDataHandler:
             """
             
             cursor.execute(create_table_query)
+            apply_pln_bill_match_schema(cursor)
             self.db_connection.commit()
             cursor.close()
             logger.info("Database tables verified/created")
@@ -195,6 +195,44 @@ class PZEMDataHandler:
             logger.error(f"Error creating tables: {e}")
             self.db_connection.rollback()
     
+    def save_mqtt_message(self, topic, data, mqtt_bridge_config_id=None):
+        """Route /data, /status, /heartbeat through shared.persist_mqtt_message."""
+        try:
+            self.ensure_db_connection()
+            cursor = self.db_connection.cursor()
+            jakarta_now = datetime.now(self.jakarta_tz)
+
+            result = persist_mqtt_message(
+                cursor,
+                topic,
+                data,
+                mqtt_bridge_config_id,
+                DEVICE_BUILDING_MAP,
+            )
+            if result == "ignored":
+                logger.error("Could not persist MQTT payload keys=%s topic=%s", list(data.keys()), topic)
+                self.db_connection.rollback()
+                cursor.close()
+                return False
+
+            self.db_connection.commit()
+            cursor.close()
+
+            da = str(data.get("device_address") or "").strip()
+            logger.info(
+                "[OK] %s stored for device %s at %s WIB",
+                result,
+                da,
+                jakarta_now.strftime("%H:%M:%S"),
+            )
+            return True
+
+        except Exception as e:
+            logger.error("Error saving MQTT message: %s", e)
+            if self.db_connection:
+                self.db_connection.rollback()
+            return False
+
     def save_sensor_data(self, data, building=None, phase=None, mqtt_bridge_config_id=None):
         """Simpan data sensor — delegasi ke shared.persist_pzem_reading."""
         try:
@@ -358,8 +396,8 @@ class MQTTClient:
                 voltage or 0,
             )
 
-            if userdata.save_sensor_data(data, building, phase, mqtt_bridge_config_id=None):
-                logger.debug("[DATABASE] Data successfully saved")
+            if userdata.save_mqtt_message(msg.topic, data, mqtt_bridge_config_id=None):
+                logger.debug("[DATABASE] Message persisted (%s/%s)", building, phase)
             else:
                 logger.warning("[DATABASE] Data save failed")
             

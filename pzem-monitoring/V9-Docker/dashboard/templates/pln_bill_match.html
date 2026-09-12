@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cocokkan kWh PLN — PZEM</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .wrap {
+            max-width: 1080px;
+            margin: 0 auto;
+            background: rgba(255,255,255,0.97);
+            border-radius: 18px;
+            padding: 28px;
+            box-shadow: 0 16px 40px rgba(0,0,0,0.12);
+        }
+        .nav { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
+        .nav a {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+        .nav a.active { color: #2c3e50; }
+        h1 { color: #2c3e50; font-size: 1.55rem; margin-bottom: 6px; }
+        .subtitle { color: #666; margin-bottom: 18px; font-size: 0.95rem; }
+        .info-box {
+            background: #fff8e6;
+            border: 1px solid #f0d9a8;
+            border-radius: 10px;
+            padding: 12px 14px;
+            margin-bottom: 20px;
+            font-size: 0.88rem;
+            color: #555;
+            line-height: 1.5;
+        }
+        label {
+            display: block;
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 6px;
+            font-size: 0.88rem;
+        }
+        select, input, textarea {
+            width: 100%;
+            padding: 10px 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 0.95rem;
+        }
+        select:focus, input:focus, textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 14px;
+        }
+        .grid-3 { grid-template-columns: repeat(3, 1fr); }
+        @media (max-width: 720px) {
+            .grid, .grid-3 { grid-template-columns: 1fr; }
+        }
+        .field { margin-bottom: 0; }
+        .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+        .btn {
+            padding: 11px 16px;
+            border: none;
+            border-radius: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 0.92rem;
+        }
+        .btn-primary { background: #28a745; color: #fff; }
+        .btn-secondary { background: #667eea; color: #fff; }
+        .btn-ghost { background: #6c757d; color: #fff; }
+        .btn-danger { background: #c0392b; color: #fff; padding: 6px 10px; font-size: 0.8rem; }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .status {
+            margin-top: 14px;
+            padding: 12px;
+            border-radius: 10px;
+            display: none;
+            font-weight: 600;
+        }
+        .status.ok { background: #d4edda; color: #155724; display: block; }
+        .status.err { background: #f8d7da; color: #721c24; display: block; }
+        h2 { color: #2c3e50; font-size: 1.15rem; margin: 28px 0 12px; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+        th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eee; }
+        th { color: #555; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em; }
+        .chip {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+        .chip.ok { background: #d4edda; color: #155724; }
+        .chip.degraded { background: #fff3cd; color: #856404; }
+        .chip.untrusted, .chip.incomplete { background: #f8d7da; color: #721c24; }
+        .result {
+            margin-top: 12px;
+            padding: 14px;
+            background: #f0f4ff;
+            border: 1px solid #c5d0f5;
+            border-radius: 10px;
+        }
+        .metrics { display: flex; flex-wrap: wrap; gap: 16px; margin: 10px 0 14px; }
+        .metric strong { display: block; font-size: 1.25rem; color: #2c3e50; }
+        .metric span { font-size: 0.78rem; color: #666; }
+        .flags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+        .empty { color: #888; font-size: 0.9rem; padding: 8px 0; }
+        .quality-list { font-size: 0.88rem; line-height: 1.6; color: #444; }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <nav class="nav">
+            <a href="/"><i class="fas fa-home"></i> Dashboard</a>
+            <a href="/reports"><i class="fas fa-file-pdf"></i> Laporan</a>
+            <a href="/canvas"><i class="fas fa-layer-group"></i> Canvas</a>
+            <a href="/settings/pln-tariff"><i class="fas fa-bolt"></i> Tarif (Rp)</a>
+            <a href="/pln-match" class="active"><i class="fas fa-balance-scale"></i> Cocokkan kWh</a>
+            <a href="/docs/perhitungan"><i class="fas fa-book"></i> Dokumentasi</a>
+        </nav>
+
+        <h1><i class="fas fa-balance-scale"></i> Cocokkan kWh invoice PLN</h1>
+        <p class="subtitle">Bandingkan register 3 fasa (R+S+T) dengan kWh di tagihan. Bukan perhitungan rupiah.</p>
+        <div class="info-box">
+            Catat pembacaan meter PLN (T0 / T1) dalam waktu WIB. Sistem memakai
+            <code>meter_energy_kwh</code> yang tersinkron, mendeteksi wrap/reset, dan
+            tidak mengkalikan satu fasa ×3. Selisih &gt;5% dilaporkan apa adanya.
+        </div>
+
+        <div class="grid">
+            <div class="field">
+                <label for="building">Gedung</label>
+                <select id="building"></select>
+            </div>
+            <div class="field">
+                <label for="readAt">Waktu baca (WIB)</label>
+                <input type="datetime-local" id="readAt">
+            </div>
+            <div class="field">
+                <label for="plnRegister">Register PLN (kWh)</label>
+                <input type="number" id="plnRegister" step="0.01" min="0" placeholder="contoh 18452.3">
+            </div>
+            <div class="field">
+                <label for="invoiceKwh">kWh invoice (opsional)</label>
+                <input type="number" id="invoiceKwh" step="0.01" min="0" placeholder="kWh pada tagihan">
+            </div>
+            <div class="field" style="grid-column: 1 / -1;">
+                <label for="notes">Catatan</label>
+                <input type="text" id="notes" placeholder="Periode Maret, petugas, dll.">
+            </div>
+        </div>
+        <div class="actions">
+            <button class="btn btn-primary" id="saveBtn" type="button"><i class="fas fa-save"></i> Simpan pembacaan</button>
+            <button class="btn btn-secondary" id="reconcileBtn" type="button"><i class="fas fa-calculator"></i> Hitung pasangan terbaru</button>
+            <button class="btn btn-ghost" id="refreshBtn" type="button"><i class="fas fa-sync"></i> Muat ulang</button>
+        </div>
+        <div class="status" id="status"></div>
+
+        <h2>Hasil rekonsiliasi</h2>
+        <div id="resultBox" class="empty">Belum ada hasil. Simpan dua pembacaan, lalu hitung.</div>
+
+        <h2>Riwayat pembacaan</h2>
+        <div id="readingsBox"><p class="empty">Memuat…</p></div>
+
+        <h2>Kualitas data</h2>
+        <div id="qualityBox" class="quality-list"><p class="empty">Memuat…</p></div>
+    </div>
+
+    <script>
+        const $ = (id) => document.getElementById(id);
+        const statusEl = $('status');
+
+        function showStatus(ok, msg) {
+            statusEl.className = 'status ' + (ok ? 'ok' : 'err');
+            statusEl.textContent = msg;
+        }
+
+        function fmtNum(v, d = 2) {
+            if (v === null || v === undefined || v === '') return '—';
+            const n = Number(v);
+            return Number.isFinite(n) ? n.toFixed(d) : '—';
+        }
+
+        function fmtTime(iso) {
+            if (!iso) return '—';
+            const dt = new Date(iso);
+            if (Number.isNaN(dt.getTime())) return iso;
+            return dt.toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
+        }
+
+        function chip(q) {
+            const key = (q || 'incomplete').toLowerCase();
+            return `<span class="chip ${key}">${key}</span>`;
+        }
+
+        async function loadBuildings() {
+            const res = await fetch('/api/pln-buildings');
+            const data = await res.json();
+            const sel = $('building');
+            const current = sel.value;
+            sel.innerHTML = '';
+            (data.buildings || []).forEach((b) => {
+                const opt = document.createElement('option');
+                opt.value = b;
+                opt.textContent = b;
+                sel.appendChild(opt);
+            });
+            if (!sel.options.length) {
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = '(belum ada gedung)';
+                sel.appendChild(opt);
+            }
+            if (current && [...sel.options].some((o) => o.value === current)) sel.value = current;
+        }
+
+        async function loadReadings() {
+            const b = $('building').value;
+            const url = b ? `/api/pln-readings?building=${encodeURIComponent(b)}` : '/api/pln-readings';
+            const res = await fetch(url);
+            const data = await res.json();
+            const rows = data.readings || [];
+            if (!rows.length) {
+                $('readingsBox').innerHTML = '<p class="empty">Belum ada pembacaan untuk gedung ini.</p>';
+                return;
+            }
+            $('readingsBox').innerHTML = `<table>
+                <thead><tr><th>Waktu (WIB)</th><th>Register PLN</th><th>Invoice kWh</th><th>Catatan</th><th></th></tr></thead>
+                <tbody>${rows.map((r) => `<tr>
+                    <td>${fmtTime(r.read_at)}</td>
+                    <td>${fmtNum(r.pln_register_kwh)}</td>
+                    <td>${fmtNum(r.invoice_kwh)}</td>
+                    <td>${(r.notes || '—')}</td>
+                    <td><button class="btn btn-danger" data-del="${r.id}">Hapus</button></td>
+                </tr>`).join('')}</tbody></table>`;
+            $('readingsBox').querySelectorAll('[data-del]').forEach((btn) => {
+                btn.addEventListener('click', () => deleteReading(btn.getAttribute('data-del')));
+            });
+        }
+
+        function renderReconcile(rec) {
+            if (!rec) {
+                $('resultBox').innerHTML = '<p class="empty">Belum ada hasil.</p>';
+                return;
+            }
+            const phases = rec.phases_json || rec.phases || {};
+            const flags = rec.flags_json || rec.flags || [];
+            const phaseRows = ['R', 'S', 'T'].map((p) => {
+                const x = phases[p] || {};
+                return `<tr>
+                    <td>${p}</td>
+                    <td>${fmtNum(x.start_kwh, 3)}</td>
+                    <td>${fmtNum(x.end_kwh, 3)}</td>
+                    <td>${fmtNum(x.phase_kwh, 3)}</td>
+                    <td>${x.method || '—'}</td>
+                    <td>${chip(x.quality)}</td>
+                </tr>`;
+            }).join('');
+            $('resultBox').innerHTML = `<div class="result">
+                <div>${chip(rec.quality)} <span style="margin-left:8px;color:#555">Gedung ${rec.building || $('building').value}</span></div>
+                <div class="metrics">
+                    <div class="metric"><strong>${fmtNum(rec.total_kwh, 3)}</strong><span>Total R+S+T (kWh)</span></div>
+                    <div class="metric"><strong>${fmtNum(rec.invoice_kwh, 3)}</strong><span>Invoice kWh</span></div>
+                    <div class="metric"><strong>${fmtNum(rec.error_pct, 2)}${rec.error_pct == null ? '' : '%'}</strong><span>Selisih</span></div>
+                    <div class="metric"><strong>${fmtNum(rec.offset_t0, 3)}</strong><span>Offset T0 (PLN − Σ)</span></div>
+                    <div class="metric"><strong>${fmtNum(rec.offset_t1, 3)}</strong><span>Offset T1 (PLN − Σ)</span></div>
+                </div>
+                <table>
+                    <thead><tr><th>Fasa</th><th>Awal</th><th>Akhir</th><th>kWh</th><th>Metode</th><th>Kualitas</th></tr></thead>
+                    <tbody>${phaseRows}</tbody>
+                </table>
+                <div class="flags">${(flags.length ? flags : ['ok']).map((f) => `<span class="chip ${String(f).includes('error') || String(f).includes('missing') || String(f).includes('untrusted') ? 'untrusted' : 'ok'}">${f}</span>`).join('')}</div>
+            </div>`;
+        }
+
+        async function loadLatestReconcile() {
+            const b = $('building').value;
+            if (!b) return;
+            const res = await fetch(`/api/pln-reconcile?building=${encodeURIComponent(b)}`);
+            const data = await res.json();
+            const rec = (data.reconciliations || [])[0];
+            renderReconcile(rec);
+        }
+
+        async function loadQuality() {
+            const b = $('building').value;
+            const url = b ? `/api/pln-quality?building=${encodeURIComponent(b)}` : '/api/pln-quality';
+            const res = await fetch(url);
+            const data = await res.json();
+            const items = data.quality || [];
+            if (!items.length) {
+                $('qualityBox').innerHTML = '<p class="empty">Tidak ada data kualitas.</p>';
+                return;
+            }
+            $('qualityBox').innerHTML = items.map((q) => {
+                const gaps = (q.gaps || []).length ? q.gaps.join(', ') : 'tidak ada';
+                const wraps = (q.wraps || []).length;
+                const resets = (q.resets || []).length;
+                const unsynced = (q.unsynced_at_reading || []).join(', ') || 'tidak ada';
+                const missing = (q.missing_phase_at_reading || []).join(', ') || 'tidak ada';
+                return `<p><strong>${q.building}</strong> — celah &gt;${q.gap_minutes} menit: <b>${gaps}</b>;
+                    wrap: ${wraps}; reset: ${resets}; fasa hilang saat baca: <b>${missing}</b>;
+                    waktu belum sync saat baca: <b>${unsynced}</b></p>`;
+            }).join('');
+        }
+
+        async function refreshAll() {
+            await loadBuildings();
+            await loadReadings();
+            await loadLatestReconcile();
+            await loadQuality();
+        }
+
+        async function saveReading() {
+            const building = $('building').value;
+            const readAt = $('readAt').value;
+            const plnRegister = $('plnRegister').value;
+            if (!building || !readAt || plnRegister === '') {
+                showStatus(false, 'Gedung, waktu baca, dan register PLN wajib diisi.');
+                return;
+            }
+            $('saveBtn').disabled = true;
+            try {
+                const body = {
+                    building,
+                    read_at: readAt,
+                    pln_register_kwh: Number(plnRegister),
+                    invoice_kwh: $('invoiceKwh').value === '' ? null : Number($('invoiceKwh').value),
+                    notes: $('notes').value || null,
+                };
+                const res = await fetch('/api/pln-readings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Gagal menyimpan');
+                showStatus(true, data.reconciliation
+                    ? 'Pembacaan disimpan dan pasangan sebelumnya dihitung.'
+                    : 'Pembacaan disimpan. Tambah pembacaan berikutnya untuk menghitung.');
+                if (data.reconciliation) renderReconcile(data.reconciliation);
+                $('plnRegister').value = '';
+                $('invoiceKwh').value = '';
+                $('notes').value = '';
+                await loadReadings();
+                await loadQuality();
+            } catch (e) {
+                showStatus(false, e.message);
+            } finally {
+                $('saveBtn').disabled = false;
+            }
+        }
+
+        async function reconcileLatest() {
+            const building = $('building').value;
+            if (!building) {
+                showStatus(false, 'Pilih gedung terlebih dahulu.');
+                return;
+            }
+            $('reconcileBtn').disabled = true;
+            try {
+                const res = await fetch('/api/pln-reconcile', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ building }),
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Gagal menghitung');
+                renderReconcile(data);
+                showStatus(true, 'Rekonsiliasi dihitung ulang.');
+            } catch (e) {
+                showStatus(false, e.message);
+            } finally {
+                $('reconcileBtn').disabled = false;
+            }
+        }
+
+        async function deleteReading(id) {
+            if (!confirm('Hapus pembacaan ini?')) return;
+            const res = await fetch(`/api/pln-readings/${id}`, { method: 'DELETE' });
+            const data = await res.json();
+            if (!res.ok) {
+                showStatus(false, data.error || 'Gagal menghapus');
+                return;
+            }
+            showStatus(true, 'Pembacaan dihapus.');
+            await loadReadings();
+            await loadLatestReconcile();
+        }
+
+        $('saveBtn').addEventListener('click', saveReading);
+        $('reconcileBtn').addEventListener('click', reconcileLatest);
+        $('refreshBtn').addEventListener('click', refreshAll);
+        $('building').addEventListener('change', async () => {
+            await loadReadings();
+            await loadLatestReconcile();
+            await loadQuality();
+        });
+
+        const now = new Date();
+        const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+        $('readAt').value = local.toISOString().slice(0, 16);
+        refreshAll().catch((e) => showStatus(false, e.message));
+    </script>
+</body>
+</html>

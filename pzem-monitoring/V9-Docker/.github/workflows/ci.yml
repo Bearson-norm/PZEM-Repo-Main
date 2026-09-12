@@ -52,6 +52,11 @@ jobs:
         cd dashboard
         python -c "from report_generator import ThreePhaseCalculator, DatabaseManager, ReportGenerator; print('All imports successful')"
 
+    - name: Test PLN bill matching
+      run: |
+        PYTHONPATH=dashboard:. python -c "from pln_reconcile import reconcile_period; print('PLN reconcile import successful')"
+        PYTHONPATH=dashboard:. python -m pytest tests -q
+
   test-db:
     name: Test Database Connection
     runs-on: ubuntu-latest

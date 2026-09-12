@@ -22,11 +22,13 @@ htmlcov/
 logs/
 *.log.*
 
-# Database
+# Database dumps (keep schema migrations in git)
 *.db
 *.sqlite
 *.sqlite3
 *.sql
+!pzem-monitoring/V9-Docker/dashboard/migrations/*.sql
+!pzem-monitoring/V9-Docker/shared/sql/*.sql
 
 # Environment variables
 .env

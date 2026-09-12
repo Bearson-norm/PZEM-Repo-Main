@@ -12,8 +12,7 @@ from psycopg2.extras import RealDictCursor
 
 from shared.pzem_ingest import (
     decode_json_payload,
-    enrich_payload_from_topic,
-    persist_pzem_reading,
+    persist_mqtt_message,
     DEFAULT_DEVICE_BUILDING_MAP,
 )
 
@@ -139,17 +138,13 @@ class _BridgeWorker:
                 data = decode_json_payload(msg.payload)
                 if not data:
                     return
-                building, phase = enrich_payload_from_topic(
-                    data, msg.topic, DEFAULT_DEVICE_BUILDING_MAP
-                )
                 conn = self._db_connect()
                 try:
                     cur = conn.cursor()
-                    persist_pzem_reading(
+                    persist_mqtt_message(
                         cur,
+                        msg.topic,
                         data,
-                        building,
-                        phase,
                         bid,
                         DEFAULT_DEVICE_BUILDING_MAP,
                     )
