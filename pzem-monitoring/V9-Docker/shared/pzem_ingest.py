@@ -9,6 +9,8 @@ import json
 import logging
 from typing import Any, Dict, Optional, Tuple
 
+from shared.energy_derive import derive_window_kwh, parse_calibration
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_DEVICE_BUILDING_MAP = {
@@ -196,7 +198,6 @@ def extract_metrics_for_db(
     meter_energy_kwh = safe_float(data.get("meter_energy_kwh"))
     energy_last = safe_float(data.get("energy_last"))
     energy_first = safe_float(data.get("energy_first"))
-    accumulated_energy_kwh = safe_float(data.get("accumulated_energy_kwh"))
     legacy_energy = safe_float(
         data.get("energy") or data.get("total_energy") or data.get("active_energy")
     )
@@ -205,6 +206,16 @@ def extract_metrics_for_db(
     )
     if meter_energy_kwh is None and energy is not None:
         meter_energy_kwh = energy
+    if energy_last is None:
+        energy_last = meter_energy_kwh
+    energy_scale, energy_offset = parse_calibration(data)
+    derived = derive_window_kwh(
+        energy_first,
+        energy_last,
+        firmware_event=data.get("energy_event"),
+        scale=energy_scale,
+        offset=energy_offset,
+    )
 
     frequency = safe_float(
         data.get("frequency") or current.get("frequency") or 50.0
@@ -230,13 +241,6 @@ def extract_metrics_for_db(
             period_start_unix = 0
         if not period_end_unix:
             period_end_unix = 0
-
-    energy_event = data.get("energy_event")
-    if energy_event is not None:
-        energy_event = str(energy_event).strip().lower() or None
-    energy_method = data.get("energy_method")
-    if energy_method is not None:
-        energy_method = str(energy_method).strip().lower() or None
 
     device_id = data.get("device_id")
     if device_id is not None:
@@ -269,10 +273,12 @@ def extract_metrics_for_db(
         "is_retry": safe_bool(data.get("is_retry")),
         "meter_energy_kwh": meter_energy_kwh,
         "energy_first": energy_first,
-        "energy_last": energy_last if energy_last is not None else meter_energy_kwh,
-        "accumulated_energy_kwh": accumulated_energy_kwh,
-        "energy_method": energy_method,
-        "energy_event": energy_event,
+        "energy_last": energy_last,
+        "accumulated_energy_kwh": derived.accumulated_energy_kwh,
+        "energy_method": derived.energy_method,
+        "energy_event": derived.energy_event,
+        "energy_scale": derived.energy_scale,
+        "energy_offset": derived.energy_offset,
     }
 
 
@@ -378,10 +384,12 @@ def persist_pzem_reading(
             time_synced, timestamp_unix, period_start_unix, period_end_unix,
             period_duration_ms, is_retry,
             meter_energy_kwh, energy_first, energy_last, accumulated_energy_kwh,
-            energy_method, energy_event, payload_json, payload_hash
+            energy_method, energy_event, energy_scale, energy_offset,
+            payload_json, payload_hash
         ) VALUES (
             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+            %s, %s, %s::jsonb, %s
         )
         ON CONFLICT DO NOTHING
         RETURNING id
@@ -417,6 +425,8 @@ def persist_pzem_reading(
             row["accumulated_energy_kwh"],
             row["energy_method"],
             row["energy_event"],
+            row["energy_scale"],
+            row["energy_offset"],
             json.dumps(data, default=str),
             payload_hash,
         ),

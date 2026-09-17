@@ -138,7 +138,10 @@
         <div class="info-box">
             Catat pembacaan meter PLN (T0 / T1) dalam waktu WIB. Sistem memakai
             <code>meter_energy_kwh</code> yang tersinkron, mendeteksi wrap/reset, dan
-            tidak mengkalikan satu fasa ×3. Selisih &gt;5% dilaporkan apa adanya.
+            tidak mengkalikan satu fasa ×3. Hardware reset <b>menghapus seri register</b>
+            dari jendela itu — kWh tagihan T0→T1 tidak diisi dengan jumlah jendela
+            atau P×Δt. Suffix pasca-reset (jika ada) hanya informasi, bukan tagihan.
+            Selisih &gt;5% dilaporkan apa adanya.
         </div>
 
         <div class="grid">
@@ -261,11 +264,15 @@
             const flags = rec.flags_json || rec.flags || [];
             const phaseRows = ['R', 'S', 'T'].map((p) => {
                 const x = phases[p] || {};
+                const suffix = x.suffix_kwh == null
+                    ? '—'
+                    : `${fmtNum(x.suffix_kwh, 3)} <span style="color:#856404;font-size:0.75rem">(bukan tagihan)</span>`;
                 return `<tr>
                     <td>${p}</td>
                     <td>${fmtNum(x.start_kwh, 3)}</td>
                     <td>${fmtNum(x.end_kwh, 3)}</td>
                     <td>${fmtNum(x.phase_kwh, 3)}</td>
+                    <td>${suffix}</td>
                     <td>${x.method || '—'}</td>
                     <td>${chip(x.quality)}</td>
                 </tr>`;
@@ -280,10 +287,14 @@
                     <div class="metric"><strong>${fmtNum(rec.offset_t1, 3)}</strong><span>Offset T1 (PLN − Σ)</span></div>
                 </div>
                 <table>
-                    <thead><tr><th>Fasa</th><th>Awal</th><th>Akhir</th><th>kWh</th><th>Metode</th><th>Kualitas</th></tr></thead>
+                    <thead><tr><th>Fasa</th><th>Awal</th><th>Akhir</th><th>kWh tagihan</th><th>Suffix pasca-reset</th><th>Metode</th><th>Kualitas</th></tr></thead>
                     <tbody>${phaseRows}</tbody>
                 </table>
-                <div class="flags">${(flags.length ? flags : ['ok']).map((f) => `<span class="chip ${String(f).includes('error') || String(f).includes('missing') || String(f).includes('untrusted') ? 'untrusted' : 'ok'}">${f}</span>`).join('')}</div>
+                <div class="flags">${(flags.length ? flags : ['ok']).map((f) => {
+                    const text = String(f);
+                    const bad = text.includes('error') || text.includes('missing') || text.includes('untrusted') || text.includes('reset');
+                    return `<span class="chip ${bad ? 'untrusted' : 'ok'}">${f}</span>`;
+                }).join('')}</div>
             </div>`;
         }
 

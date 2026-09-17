@@ -392,7 +392,7 @@ def _run_and_store(conn, building: str, t0: Dict[str, Any], t1: Dict[str, Any]) 
             cur.execute(
                 """
                 SELECT meter_energy_kwh, energy, period_end_unix, time_synced,
-                       accumulated_energy_kwh, energy_method, energy_event
+                       energy_event, energy_scale, energy_offset
                 FROM pzem_data
                 WHERE building = %s AND UPPER(phase) = %s
                   AND period_end_unix IS NOT NULL

@@ -14,9 +14,9 @@ def _row(phase, energy, ts, **kwargs):
         meter_energy_kwh=energy,
         period_end_unix=ts,
         time_synced=kwargs.get("time_synced", True),
-        accumulated_energy_kwh=kwargs.get("accumulated_energy_kwh"),
-        energy_method=kwargs.get("energy_method"),
         energy_event=kwargs.get("energy_event"),
+        energy_scale=kwargs.get("energy_scale"),
+        energy_offset=kwargs.get("energy_offset"),
     )
 
 
@@ -61,30 +61,43 @@ def test_wrap_heuristic_without_event():
     assert abs(result.phases["R"].phase_kwh - ((9999.99 - 9999.50) + 0.10)) < 0.001
 
 
-def test_reset_uses_accumulated_and_degraded():
+def test_calibrated_wrap_scale_not_one():
+    t0, t1 = 100, 200
+    scale, offset = 2.0, 0.0
+    start, end = 18000.0, 50.0
+    expected = wrap_kwh(start, end, scale, offset)
+    rows = {
+        "R": [
+            _row("R", start, t0, energy_scale=scale, energy_offset=offset),
+            _row("R", end, t1, energy_scale=scale, energy_offset=offset),
+        ],
+        "S": [_row("S", 1.0, t0), _row("S", 1.0, t1)],
+        "T": [_row("T", 1.0, t0), _row("T", 1.0, t1)],
+    }
+    result = reconcile_period(rows, {}, t0, t1)
+    assert result.phases["R"].method == "wrap"
+    assert abs(result.phases["R"].phase_kwh - expected) < 0.001
+    assert abs(expected - ((9999.99 * scale - start) + end)) < 0.001
+
+
+def test_reset_wipes_series_no_window_sum():
     t0, t1 = 100, 400
     rows = {
         "R": [
-            _row("R", 150.0, t0, energy_method="counter_delta", accumulated_energy_kwh=1.0),
-            _row(
-                "R",
-                0.5,
-                250,
-                energy_event="reset",
-                energy_method="counter_delta",
-                accumulated_energy_kwh=2.5,
-            ),
-            _row("R", 0.5, t1, energy_method="power_integration", accumulated_energy_kwh=0.4),
+            _row("R", 150.0, t0),
+            _row("R", 0.5, 250, energy_event="reset"),
+            _row("R", 0.9, t1),
         ],
         "S": [_row("S", 10.0, t0), _row("S", 11.0, t1)],
         "T": [_row("T", 20.0, t0), _row("T", 20.5, t1)],
     }
     events = {"R": [EnergyEvent("R", "reset", 250)], "S": [], "T": []}
     result = reconcile_period(rows, events, t0, t1, invoice_kwh=4.4)
-    assert result.phases["R"].method == "accumulated"
+    assert result.phases["R"].method == "reset_wipe"
     assert result.phases["R"].quality == "degraded"
-    # windows in (T0,T1]: 2.5 + 0.4 (the t0 row is not inside the open interval)
-    assert abs(result.phases["R"].phase_kwh - 2.9) < 0.001
+    assert result.phases["R"].phase_kwh is None
+    assert result.total_kwh is None
+    assert result.error_pct is None
     assert result.quality == "degraded"
     assert "reset:R" in result.flags
 
@@ -94,14 +107,50 @@ def test_reset_does_not_use_end_minus_start():
     rows = {
         "R": [
             _row("R", 150.0, t0),
-            _row("R", 0.5, t1, energy_event="reset", energy_method="counter_delta", accumulated_energy_kwh=3.0),
+            _row("R", 0.5, t1, energy_event="reset"),
         ],
         "S": [_row("S", 1.0, t0), _row("S", 1.0, t1)],
         "T": [_row("T", 1.0, t0), _row("T", 1.0, t1)],
     }
     result = reconcile_period(rows, {"R": [EnergyEvent("R", "reset", t1)]}, t0, t1)
+    assert result.phases["R"].phase_kwh is None
     assert result.phases["R"].phase_kwh != (0.5 - 150.0)
-    assert abs(result.phases["R"].phase_kwh - 3.0) < 0.001
+    assert result.phases["R"].method == "reset_wipe"
+
+
+def test_reset_suffix_not_included_in_total():
+    t0, t1 = 100, 400
+    rows = {
+        "R": [
+            _row("R", 150.0, t0),
+            _row("R", 0.5, 250, energy_event="reset"),
+            _row("R", 0.5, 260),
+            _row("R", 1.2, t1),
+        ],
+        "S": [_row("S", 10.0, t0), _row("S", 11.0, t1)],
+        "T": [_row("T", 20.0, t0), _row("T", 20.5, t1)],
+    }
+    result = reconcile_period(
+        rows, {"R": [EnergyEvent("R", "reset", 250)]}, t0, t1, invoice_kwh=10
+    )
+    assert result.phases["R"].phase_kwh is None
+    assert result.total_kwh is None
+    assert abs(result.phases["R"].suffix_kwh - 0.7) < 0.001
+    assert result.phases["R"].suffix_start_unix == 260
+
+
+def test_drop_not_near_wrap_is_reset_wipe_not_negative_delta():
+    t0, t1 = 100, 200
+    rows = {
+        "R": [_row("R", 500.0, t0), _row("R", 10.0, t1)],
+        "S": [_row("S", 1.0, t0), _row("S", 1.0, t1)],
+        "T": [_row("T", 1.0, t0), _row("T", 1.0, t1)],
+    }
+    result = reconcile_period(rows, {}, t0, t1)
+    assert result.phases["R"].method == "reset_wipe"
+    assert result.phases["R"].quality == "degraded"
+    assert result.phases["R"].phase_kwh is None
+    assert result.quality == "degraded"
 
 
 def test_missing_s_phase_incomplete_no_invented_data():
@@ -137,13 +186,13 @@ def test_unsynced_unix_zero_excluded_from_bounds():
     assert abs(result.phases["R"].phase_kwh - 2.0) < 0.001
 
 
-def test_normal_path_uses_register_delta_not_accumulated_sum():
+def test_normal_path_uses_register_delta_not_window_sum():
     t0, t1 = 100, 400
     rows = {
         "R": [
-            _row("R", 100.0, t0, energy_method="counter_delta", accumulated_energy_kwh=50.0),
-            _row("R", 105.0, 250, energy_method="counter_delta", accumulated_energy_kwh=50.0),
-            _row("R", 110.0, t1, energy_method="counter_delta", accumulated_energy_kwh=50.0),
+            _row("R", 100.0, t0),
+            _row("R", 105.0, 250),
+            _row("R", 110.0, t1),
         ],
         "S": [_row("S", 200.0, t0), _row("S", 205.0, t1)],
         "T": [_row("T", 300.0, t0), _row("T", 302.0, t1)],
@@ -166,19 +215,6 @@ def test_three_phases_summed_never_times_three():
     result = reconcile_period(rows, {}, t0, t1)
     assert abs(result.total_kwh - 3.0) < 0.001
     assert result.total_kwh != 1.0 * 3 * 3
-
-
-def test_untrusted_drop_not_near_wrap():
-    t0, t1 = 100, 200
-    rows = {
-        "R": [_row("R", 500.0, t0), _row("R", 10.0, t1)],
-        "S": [_row("S", 1.0, t0), _row("S", 1.0, t1)],
-        "T": [_row("T", 1.0, t0), _row("T", 1.0, t1)],
-    }
-    result = reconcile_period(rows, {}, t0, t1)
-    assert result.phases["R"].quality == "untrusted"
-    assert result.phases["R"].phase_kwh is None
-    assert result.quality == "untrusted"
 
 
 def test_invoice_omitted_skips_error_pct():

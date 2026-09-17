@@ -193,6 +193,7 @@ class DatabaseManager:
             "002_mqtt_bridge_name_unique.sql",
             "003_pln_tariff_settings.sql",
             "004_pln_bill_match.sql",
+            "005_firmware_v12_derive.sql",
         ):
             path = os.path.join(mig_dir, fname)
             if not os.path.isfile(path):

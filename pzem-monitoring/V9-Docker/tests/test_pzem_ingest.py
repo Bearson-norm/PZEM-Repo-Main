@@ -47,16 +47,15 @@ class FakeCursor:
 
 def _contract_payload(**overrides):
     data = {
-        "firmware_version": "1.1.0",
+        "firmware_version": "1.2.0",
         "device_id": "esp-r",
         "building": "CKPG1",
         "phase": "R",
         "meter_energy_kwh": 123.45,
         "energy_first": 123.40,
         "energy_last": 123.45,
-        "accumulated_energy_kwh": 0.05,
-        "energy_method": "counter_delta",
         "energy_event": "none",
+        "calibration": {"energy_scale": 1.0, "energy_offset": 0.0},
         "time_synced": True,
         "timestamp_unix": 1_700_000_300,
         "period_start_unix": 1_700_000_000,
@@ -141,11 +140,101 @@ def test_heartbeat_routed_not_as_data():
     assert not any("insert into pzem_data" in sql.lower() for sql in cur.sqls)
 
 
-def test_wrap_event_sql_emitted():
+def test_wrap_9999_90_to_0_20_derives_window():
+    row = extract_metrics_for_db(
+        _contract_payload(
+            meter_energy_kwh=0.20,
+            energy_first=9999.90,
+            energy_last=0.20,
+            energy_event="none",
+        ),
+        "CKPG1",
+        "R",
+    )
+    assert row["energy_event"] == "wrap"
+    assert row["energy_method"] == "wrap"
+    assert abs(row["accumulated_energy_kwh"] - 0.29) < 0.001
+    assert row["energy_scale"] == 1.0
+    assert row["energy_offset"] == 0.0
+
+
+def test_reset_150_to_0_5_wipes_window_kwh():
+    row = extract_metrics_for_db(
+        _contract_payload(
+            meter_energy_kwh=0.5,
+            energy_first=150.0,
+            energy_last=0.5,
+            energy_event="none",
+        ),
+        "CKPG1",
+        "R",
+    )
+    assert row["energy_event"] == "reset"
+    assert row["energy_method"] == "reset"
+    assert row["accumulated_energy_kwh"] is None
+
+
+def test_v11_leftover_accumulated_and_method_ignored():
+    row = extract_metrics_for_db(
+        _contract_payload(
+            firmware_version="1.1.0",
+            energy_first=10.0,
+            energy_last=10.5,
+            meter_energy_kwh=10.5,
+            accumulated_energy_kwh=999.0,
+            energy_method="power_integration",
+        ),
+        "CKPG1",
+        "R",
+    )
+    assert abs(row["accumulated_energy_kwh"] - 0.5) < 0.0001
+    assert row["energy_method"] == "delta"
+    assert row["energy_event"] == "none"
+
+
+def test_firmware_reset_hint_overridden_by_independent_wrap():
+    row = extract_metrics_for_db(
+        _contract_payload(
+            meter_energy_kwh=0.20,
+            energy_first=9999.90,
+            energy_last=0.20,
+            energy_event="reset",
+        ),
+        "CKPG1",
+        "R",
+    )
+    assert row["energy_event"] == "wrap"
+    assert row["energy_method"] == "wrap"
+    assert abs(row["accumulated_energy_kwh"] - 0.29) < 0.001
+
+
+def test_wrap_event_sql_emitted_from_classified_wrap():
     cur = FakeCursor()
     persist_pzem_reading(
         cur,
-        _contract_payload(energy_event="wrap", meter_energy_kwh=0.2),
+        _contract_payload(
+            energy_event="none",
+            energy_first=9999.90,
+            energy_last=0.20,
+            meter_energy_kwh=0.20,
+        ),
+        "CKPG1",
+        "R",
+        None,
+    )
+    joined = "\n".join(cur.sqls).lower()
+    assert "pzem_energy_events" in joined
+
+
+def test_reset_event_sql_emitted():
+    cur = FakeCursor()
+    persist_pzem_reading(
+        cur,
+        _contract_payload(
+            energy_first=150.0,
+            energy_last=0.5,
+            meter_energy_kwh=0.5,
+        ),
         "CKPG1",
         "R",
         None,

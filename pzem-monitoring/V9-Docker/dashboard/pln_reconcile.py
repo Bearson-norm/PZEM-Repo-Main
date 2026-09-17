@@ -3,19 +3,24 @@ PLN invoice kWh reconciliation from 3-phase PZEM meter registers.
 
 Pure functions — no Flask, no tariff / rupiah math.
 Firmware remains the source of the hardware register; this module only
-applies T0→T1 register-delta, wrap, and degraded reset rules.
+applies T0→T1 register-delta, wrap, and reset-wipe rules.
+Window kWh is derived on ingest; never sum windows across a hardware reset.
 """
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+
+from shared.energy_derive import (
+    DEFAULT_OFFSET,
+    DEFAULT_SCALE,
+    is_reset_registers,
+    is_wrap_registers,
+    wrap_consumption,
+)
 
 PHASES = ("R", "S", "T")
-WRAP_REGISTER_MAX = 9999.99
-WRAP_START_MIN = 9000.0
-WRAP_END_MAX = 100.0
-VALID_ACCUM_METHODS = frozenset({"counter_delta", "power_integration"})
 DEFAULT_GAP_MINUTES = 20
 ERROR_ALERT_PCT = 5.0
 
@@ -26,9 +31,9 @@ class MeterRow:
     meter_energy_kwh: float
     period_end_unix: int
     time_synced: bool = True
-    accumulated_energy_kwh: Optional[float] = None
-    energy_method: Optional[str] = None
     energy_event: Optional[str] = None
+    energy_scale: Optional[float] = None
+    energy_offset: Optional[float] = None
 
 
 @dataclass
@@ -48,6 +53,8 @@ class PhaseResult:
     phase_kwh: Optional[float] = None
     method: str = "none"
     quality: str = "incomplete"
+    suffix_kwh: Optional[float] = None
+    suffix_start_unix: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -105,7 +112,7 @@ def _as_int(value: Any) -> Optional[int]:
 
 def _as_bool(value: Any) -> bool:
     if isinstance(value, bool):
-        return value
+        return True if value else False
     if value in (1, "1", "true", "True", "yes"):
         return True
     return False
@@ -125,9 +132,9 @@ def meter_row_from_mapping(phase: str, row: Dict[str, Any]) -> Optional[MeterRow
         meter_energy_kwh=energy,
         period_end_unix=period_end,
         time_synced=_as_bool(row.get("time_synced")),
-        accumulated_energy_kwh=_as_float(row.get("accumulated_energy_kwh")),
-        energy_method=(str(row["energy_method"]).strip().lower() if row.get("energy_method") else None),
         energy_event=(str(row["energy_event"]).strip().lower() if row.get("energy_event") else None),
+        energy_scale=_as_float(row.get("energy_scale")),
+        energy_offset=_as_float(row.get("energy_offset")),
     )
 
 
@@ -167,30 +174,97 @@ def events_in_window(
     ]
 
 
-def is_wrap(start: float, end: float, wrap_events: Sequence[EnergyEvent]) -> bool:
-    if wrap_events:
-        return True
-    return start >= WRAP_START_MIN and end <= WRAP_END_MAX
+def wrap_kwh(
+    start: float,
+    end: float,
+    scale: float = DEFAULT_SCALE,
+    offset: float = DEFAULT_OFFSET,
+) -> float:
+    return wrap_consumption(start, end, scale, offset)
 
 
-def wrap_kwh(start: float, end: float) -> float:
-    return (WRAP_REGISTER_MAX - start) + end
-
-
-def sum_accumulated(rows: Sequence[MeterRow], t0_unix: int, t1_unix: int) -> Optional[float]:
-    total = 0.0
-    counted = False
+def _calibration_of(
+    *rows: Optional[MeterRow],
+    default_scale: float = DEFAULT_SCALE,
+    default_offset: float = DEFAULT_OFFSET,
+) -> Tuple[float, float]:
+    scale = default_scale
+    offset = default_offset
     for row in rows:
-        if not (t0_unix < row.period_end_unix <= t1_unix):
+        if row is None:
             continue
-        method = (row.energy_method or "").strip().lower()
-        if method not in VALID_ACCUM_METHODS:
+        if row.energy_scale is not None:
+            scale = float(row.energy_scale)
+            break
+    for row in rows:
+        if row is None:
             continue
-        if row.accumulated_energy_kwh is None:
-            continue
-        total += float(row.accumulated_energy_kwh)
-        counted = True
-    return total if counted else None
+        if row.energy_offset is not None:
+            offset = float(row.energy_offset)
+            break
+    return scale, offset
+
+
+def find_reset_unix(
+    rows: Sequence[MeterRow],
+    events: Sequence[EnergyEvent],
+    t0_unix: int,
+    t1_unix: int,
+    scale: float,
+    offset: float,
+) -> Optional[int]:
+    """Latest reset in (T0, T1] from events or independent register drops."""
+    times: List[int] = []
+    for event in events_in_window(events, t0_unix, t1_unix, "reset"):
+        times.append(int(event.period_end_unix))
+    usable = sorted(
+        [
+            r
+            for r in rows
+            if is_usable_bound(r) and t0_unix <= r.period_end_unix <= t1_unix
+        ],
+        key=lambda r: r.period_end_unix,
+    )
+    for prev, curr in zip(usable, usable[1:]):
+        sc, off = _calibration_of(
+            curr, prev, default_scale=scale, default_offset=offset
+        )
+        if is_reset_registers(prev.meter_energy_kwh, curr.meter_energy_kwh, sc, off):
+            times.append(int(curr.period_end_unix))
+        if (curr.energy_event or "").strip().lower() == "reset":
+            times.append(int(curr.period_end_unix))
+    return max(times) if times else None
+
+
+def compute_suffix(
+    rows: Sequence[MeterRow],
+    reset_unix: int,
+    t1_unix: int,
+) -> Tuple[Optional[float], Optional[int]]:
+    """
+    Informational new series after the reset window. Not a T0→T1 bill.
+    First time_synced snapshot strictly after the reset window, through T1.
+    """
+    after = [
+        r
+        for r in rows
+        if is_usable_bound(r) and reset_unix < r.period_end_unix <= t1_unix
+    ]
+    if not after:
+        return None, None
+    start_row = min(after, key=lambda r: r.period_end_unix)
+    end_row = pick_end_register(rows, t1_unix)
+    if end_row is None or end_row.period_end_unix < start_row.period_end_unix:
+        return None, start_row.period_end_unix
+    scale, offset = _calibration_of(start_row, end_row)
+    start = float(start_row.meter_energy_kwh)
+    end = float(end_row.meter_energy_kwh)
+    suffix_start = int(start_row.period_end_unix)
+    if end >= start:
+        return end - start, suffix_start
+    if is_wrap_registers(start, end, scale, offset):
+        return wrap_consumption(start, end, scale, offset), suffix_start
+    return None, suffix_start
 
 
 def reconcile_phase(
@@ -221,9 +295,26 @@ def reconcile_phase(
     result.end_kwh = end
     result.start_period_end_unix = start_row.period_end_unix
     result.end_period_end_unix = end_row.period_end_unix
+    scale, offset = _calibration_of(start_row, end_row)
 
     wrap_ev = events_in_window(events, t0_unix, t1_unix, "wrap")
     reset_ev = events_in_window(events, t0_unix, t1_unix, "reset")
+    last_reset = find_reset_unix(rows, events, t0_unix, t1_unix, scale, offset)
+    independent_reset = is_reset_registers(start, end, scale, offset)
+
+    if last_reset is not None or reset_ev or independent_reset:
+        result.phase_kwh = None
+        result.method = "reset_wipe"
+        result.quality = "degraded"
+        reset_at = last_reset
+        if reset_at is None and reset_ev:
+            reset_at = max(int(e.period_end_unix) for e in reset_ev)
+        if reset_at is None:
+            reset_at = int(end_row.period_end_unix)
+        suffix_kwh, suffix_start = compute_suffix(rows, reset_at, t1_unix)
+        result.suffix_kwh = suffix_kwh
+        result.suffix_start_unix = suffix_start
+        return result
 
     if end >= start:
         result.phase_kwh = end - start
@@ -231,17 +322,10 @@ def reconcile_phase(
         result.quality = "ok"
         return result
 
-    if is_wrap(start, end, wrap_ev):
-        result.phase_kwh = wrap_kwh(start, end)
+    if wrap_ev or is_wrap_registers(start, end, scale, offset):
+        result.phase_kwh = wrap_kwh(start, end, scale, offset)
         result.method = "wrap"
         result.quality = "ok"
-        return result
-
-    if reset_ev:
-        accumulated = sum_accumulated(rows, t0_unix, t1_unix)
-        result.phase_kwh = accumulated
-        result.method = "accumulated"
-        result.quality = "degraded" if accumulated is not None else "untrusted"
         return result
 
     result.method = "none"
@@ -267,6 +351,7 @@ def reconcile_period(
     """
     Compare 3-phase register consumption between T0 and T1 to invoice kWh.
     Never multiplies one phase by 3. Does not apply rupiah tariffs.
+    A hardware reset wipes that phase's T0→T1 bill (suffix is informational only).
     """
     phase_events = phase_events or {}
     result = ReconcileResult(
@@ -279,7 +364,6 @@ def reconcile_period(
     for phase in PHASES:
         rows = list(phase_rows.get(phase) or [])
         events = list(phase_events.get(phase) or [])
-        # Events encoded on the rows themselves also count
         for row in rows:
             if row.energy_event in ("wrap", "reset"):
                 events.append(
@@ -292,6 +376,8 @@ def reconcile_period(
         phase_result = reconcile_phase(phase, rows, events, t0_unix, t1_unix)
         if phase_result.phase_kwh is not None:
             phase_result.phase_kwh = _round4(phase_result.phase_kwh)
+        if phase_result.suffix_kwh is not None:
+            phase_result.suffix_kwh = _round4(phase_result.suffix_kwh)
         result.phases[phase] = phase_result
         if phase_result.quality == "incomplete":
             flags.append(f"missing_phase:{phase}")

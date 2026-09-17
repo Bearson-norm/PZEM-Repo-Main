@@ -156,8 +156,11 @@ jobs:
           dashboard/pln_match_routes.py \
           dashboard/templates/pln_bill_match.html \
           dashboard/migrations/004_pln_bill_match.sql \
+          dashboard/migrations/005_firmware_v12_derive.sql \
           shared/schema.py \
-          shared/sql/004_pln_bill_match.sql
+          shared/energy_derive.py \
+          shared/sql/004_pln_bill_match.sql \
+          shared/sql/005_firmware_v12_derive.sql
         do
           if [ ! -f "$required" ]; then
             echo "❌ ERROR: $required not found!"
@@ -183,7 +186,9 @@ jobs:
           || ! tar -tzf ../../${PACKAGE_NAME} | grep -q "dashboard/templates/dashboard.html" \
           || ! tar -tzf ../../${PACKAGE_NAME} | grep -q "shared/pzem_ingest.py" \
           || ! tar -tzf ../../${PACKAGE_NAME} | grep -q "dashboard/templates/pln_bill_match.html" \
-          || ! tar -tzf ../../${PACKAGE_NAME} | grep -q "dashboard/migrations/004_pln_bill_match.sql"; then
+          || ! tar -tzf ../../${PACKAGE_NAME} | grep -q "dashboard/migrations/004_pln_bill_match.sql" \
+          || ! tar -tzf ../../${PACKAGE_NAME} | grep -q "shared/energy_derive.py" \
+          || ! tar -tzf ../../${PACKAGE_NAME} | grep -q "shared/sql/005_firmware_v12_derive.sql"; then
           echo "❌ Package verification failed!"
           exit 1
         fi
@@ -375,6 +380,12 @@ jobs:
           echo "✅ pln_readings migration present"
         else
           echo "⚠️  pln_readings table not visible yet (dashboard applies 004 on startup)"
+        fi
+
+        if $DOCKER_COMPOSE exec -T db psql -U postgres -d pzem_monitoring -c "SELECT column_name FROM information_schema.columns WHERE table_name='pzem_data' AND column_name='energy_scale';" | grep -q energy_scale; then
+          echo "✅ energy_scale column present (005)"
+        else
+          echo "⚠️  energy_scale not visible yet (dashboard/mqtt apply 005 on startup)"
         fi
         
         # Cleanup
