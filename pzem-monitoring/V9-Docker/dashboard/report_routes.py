@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 import os
 import logging
 from report_generator import DatabaseManager, ReportGenerator
+from report_kwh_copy import KWH_COMPARISON_HELP_LINES, KWH_COMPARISON_HELP_TITLE
 
 logger = logging.getLogger(__name__)
 
@@ -294,6 +295,74 @@ def report_dashboard():
             margin-top: 10px;
         }
 
+        .kwh-help {
+            background: #fff;
+            border: 1px solid #b8c9f0;
+            border-left: 4px solid #667eea;
+            border-radius: 8px;
+            padding: 12px 14px;
+            margin-bottom: 16px;
+            font-size: 0.85rem;
+            color: #444;
+        }
+
+        .kwh-help h4 {
+            color: #2c3e50;
+            font-size: 0.95rem;
+            margin-bottom: 8px;
+        }
+
+        .kwh-help h4 i {
+            color: #667eea;
+            margin-right: 6px;
+        }
+
+        .kwh-help ul {
+            margin: 0;
+            padding-left: 1.2rem;
+        }
+
+        .kwh-help li {
+            margin-bottom: 4px;
+            line-height: 1.4;
+        }
+
+        .kwh-period-banner {
+            font-size: 0.85rem;
+            color: #2c3e50;
+            background: white;
+            border-radius: 8px;
+            padding: 10px 12px;
+            margin-bottom: 12px;
+            border: 1px solid #dde3f5;
+            line-height: 1.5;
+        }
+
+        .kwh-interpretation {
+            font-size: 0.9rem;
+            font-weight: 600;
+            margin-bottom: 14px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            background: white;
+            border: 1px solid #dde3f5;
+        }
+
+        .kwh-interpretation.down { color: #1e7e34; border-left: 4px solid #27ae60; }
+        .kwh-interpretation.up { color: #a93226; border-left: 4px solid #c0392b; }
+        .kwh-interpretation.flat { color: #555; border-left: 4px solid #95a5a6; }
+
+        .kwh-breakdown-wrap {
+            overflow-x: auto;
+            margin-top: 16px;
+        }
+
+        .kwh-breakdown-wrap h4 {
+            font-size: 0.95rem;
+            color: #2c3e50;
+            margin-bottom: 8px;
+        }
+
         .tariff-panel {
             margin: 0 0 28px;
             padding: 22px;
@@ -493,6 +562,14 @@ def report_dashboard():
 
         <div id="kwhPreview" class="kwh-preview">
             <h3><i class="fas fa-bolt"></i> Preview Perbandingan kWh</h3>
+            <div class="kwh-help">
+                <h4><i class="fas fa-circle-info"></i> {{ kwh_help_title }}</h4>
+                <ul>
+                {% for line in kwh_help_lines %}
+                    <li>{{ line }}</li>
+                {% endfor %}
+                </ul>
+            </div>
             <div class="kwh-preview-grid">
                 <div class="kwh-stat">
                     <div class="label">Periode Terpilih</div>
@@ -503,7 +580,7 @@ def report_dashboard():
                     <div class="value" id="kwhPrevious">-</div>
                 </div>
                 <div class="kwh-stat">
-                    <div class="label">Selisih</div>
+                    <div class="label">Selisih vs periode sebelumnya</div>
                     <div class="value" id="kwhDelta">-</div>
                 </div>
                 <div class="kwh-stat">
@@ -511,18 +588,27 @@ def report_dashboard():
                     <div class="value" id="kwhChange">-</div>
                 </div>
             </div>
+            <div class="kwh-period-banner" id="kwhPeriodBanner"></div>
+            <div class="kwh-interpretation flat" id="kwhInterpretation"></div>
             <table class="kwh-device-table" id="kwhDeviceTable" style="display:none;">
                 <thead>
                     <tr>
                         <th>Phase</th>
                         <th>Terpilih (kWh)</th>
                         <th>Sebelumnya (kWh)</th>
-                        <th>Selisih</th>
+                        <th>Selisih vs sebelumnya</th>
                         <th>Perubahan</th>
                     </tr>
                 </thead>
                 <tbody id="kwhDeviceBody"></tbody>
             </table>
+            <div class="kwh-breakdown-wrap" id="kwhTimeBreakdown" style="display:none;">
+                <h4 id="kwhTimeBreakdownTitle"></h4>
+                <table class="kwh-device-table" id="kwhTimeTable">
+                    <thead id="kwhTimeHead"></thead>
+                    <tbody id="kwhTimeBody"></tbody>
+                </table>
+            </div>
             <p class="kwh-preview-note" id="kwhPreviewNote"></p>
         </div>
         
@@ -722,6 +808,83 @@ def report_dashboard():
                 }
             }
 
+            function formatBucketLabel(iso, granularity) {
+                const d = new Date(iso);
+                if (Number.isNaN(d.getTime())) return String(iso || '').slice(0, 16);
+                if (granularity === 'hourly') {
+                    return d.toLocaleString('id-ID', {
+                        day: '2-digit', month: '2-digit', year: 'numeric',
+                        hour: '2-digit', minute: '2-digit'
+                    });
+                }
+                return d.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' });
+            }
+
+            function buildInterpretation(data) {
+                const delta = Number(data.comparison.delta_kwh || 0);
+                const pct = Number(data.comparison.change_percent || 0);
+                const prevStart = new Date(data.previous_period.start).toLocaleString('id-ID');
+                const prevEnd = new Date(data.previous_period.end).toLocaleString('id-ID');
+                const absKwh = Math.abs(delta).toFixed(3);
+                const absPct = Math.abs(pct).toFixed(1).replace('.', ',');
+                if (delta < 0) {
+                    return {
+                        text: `Konsumsi turun ${absKwh} kWh (${absPct}%) dibanding periode pembanding (${prevStart} – ${prevEnd}). Angka minus tidak berarti arus balik ke sumber.`,
+                        cls: 'down'
+                    };
+                }
+                if (delta > 0) {
+                    return {
+                        text: `Konsumsi naik ${absKwh} kWh (+${absPct}%) dibanding periode pembanding (${prevStart} – ${prevEnd}).`,
+                        cls: 'up'
+                    };
+                }
+                return {
+                    text: `Konsumsi sama dengan periode pembanding (${prevStart} – ${prevEnd}).`,
+                    cls: 'flat'
+                };
+            }
+
+            function renderTimeBreakdown(data) {
+                const breakdown = data.time_breakdown || [];
+                const wrap = document.getElementById('kwhTimeBreakdown');
+                const head = document.getElementById('kwhTimeHead');
+                const body = document.getElementById('kwhTimeBody');
+                const titleEl = document.getElementById('kwhTimeBreakdownTitle');
+                const granularity = data.bucket_granularity === 'hourly' ? 'per jam' : 'harian';
+
+                if (!breakdown.length) {
+                    wrap.style.display = 'none';
+                    head.innerHTML = '';
+                    body.innerHTML = '';
+                    return;
+                }
+
+                const deviceSet = new Set();
+                breakdown.forEach(row => {
+                    Object.keys(row.by_device || {}).forEach(dev => deviceSet.add(dev));
+                });
+                const devices = Array.from(deviceSet).sort();
+
+                titleEl.textContent = `Breakdown kWh ${granularity} (periode terpilih)`;
+                head.innerHTML = '<tr><th>Waktu</th><th>Total kWh</th>' +
+                    devices.map(d => `<th>Phase ${d}</th>`).join('') + '</tr>';
+
+                body.innerHTML = '';
+                breakdown.forEach(row => {
+                    const tr = document.createElement('tr');
+                    const byDev = row.by_device || {};
+                    let cells = `<td>${formatBucketLabel(row.time_bucket, data.bucket_granularity)}</td>`;
+                    cells += `<td>${Number(row.total_kwh || 0).toFixed(3)}</td>`;
+                    devices.forEach(d => {
+                        cells += `<td>${Number(byDev[d] || 0).toFixed(3)}</td>`;
+                    });
+                    tr.innerHTML = cells;
+                    body.appendChild(tr);
+                });
+                wrap.style.display = 'block';
+            }
+
             function renderKwhPreview(data) {
                 if (!data || !data.current_period) return;
 
@@ -738,6 +901,20 @@ def report_dashboard():
                 const changeEl = document.getElementById('kwhChange');
                 changeEl.textContent = formatChange(change);
                 changeEl.className = 'value ' + (change > 0 ? 'positive' : change < 0 ? 'negative' : '');
+
+                const curStart = new Date(data.current_period.start).toLocaleString('id-ID');
+                const curEnd = new Date(data.current_period.end).toLocaleString('id-ID');
+                const prevStart = new Date(data.previous_period.start).toLocaleString('id-ID');
+                const prevEnd = new Date(data.previous_period.end).toLocaleString('id-ID');
+                document.getElementById('kwhPeriodBanner').innerHTML =
+                    `<strong>Periode terpilih:</strong> ${curStart} – ${curEnd}<br>` +
+                    `<strong>Periode pembanding:</strong> ${prevStart} – ${prevEnd}<br>` +
+                    `<em>Durasi pembanding sama dengan periode terpilih (rentang tepat sebelum tanggal mulai).</em>`;
+
+                const interp = buildInterpretation(data);
+                const interpEl = document.getElementById('kwhInterpretation');
+                interpEl.textContent = interp.text;
+                interpEl.className = 'kwh-interpretation ' + interp.cls;
 
                 const tbody = document.getElementById('kwhDeviceBody');
                 tbody.innerHTML = '';
@@ -760,12 +937,10 @@ def report_dashboard():
                     table.style.display = 'none';
                 }
 
-                const curStart = new Date(data.current_period.start).toLocaleString('id-ID');
-                const curEnd = new Date(data.current_period.end).toLocaleString('id-ID');
-                const prevStart = new Date(data.previous_period.start).toLocaleString('id-ID');
-                const prevEnd = new Date(data.previous_period.end).toLocaleString('id-ID');
+                renderTimeBreakdown(data);
+
                 document.getElementById('kwhPreviewNote').textContent =
-                    `Periode terpilih: ${curStart} – ${curEnd}. Pembanding: ${prevStart} – ${prevEnd}. Breakdown ${data.bucket_granularity === 'hourly' ? 'per jam' : 'harian'} disertakan di PDF.`;
+                    'Ringkasan yang sama (termasuk breakdown) disertakan di PDF saat Anda mengklik Generate Report.';
             }
             
             form.addEventListener('submit', async function(e) {
@@ -839,7 +1014,11 @@ def report_dashboard():
 </body>
 </html>
     """
-    return render_template_string(template)
+    return render_template_string(
+        template,
+        kwh_help_title=KWH_COMPARISON_HELP_TITLE,
+        kwh_help_lines=KWH_COMPARISON_HELP_LINES,
+    )
 
 @report_bp.route('/generate')
 def generate_report():

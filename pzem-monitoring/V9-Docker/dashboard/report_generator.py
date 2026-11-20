@@ -23,6 +23,7 @@ import logging
 import pytz
 from pln_calculator import PLNTariffCalculator, calculate_pln_bill
 from pln_tariff_settings import calculate_bill_resolved, get_calculator
+from report_kwh_copy import KWH_COMPARISON_HELP_HTML, format_delta_interpretation
 
 # Database config - PASTIKAN SAMA dengan mqtt_client.py
 DB_CONFIG = {
@@ -900,10 +901,20 @@ class ReportGenerator:
         <i>Periode pembanding memiliki durasi yang sama dengan periode terpilih (periode sebelumnya).</i>
         """
         story.append(Paragraph(period_text, self.normal_style))
+        story.append(Spacer(1, 8))
+        story.append(Paragraph(KWH_COMPARISON_HELP_HTML, self.normal_style))
+        interp = format_delta_interpretation(
+            cmp_info.get('delta_kwh'),
+            cmp_info.get('change_percent'),
+            prev.get('start'),
+            prev.get('end'),
+        )
+        story.append(Spacer(1, 6))
+        story.append(Paragraph(f"<i>{interp}</i>", self.normal_style))
         story.append(Spacer(1, 10))
 
         summary_rows = [
-            ['Metrik', 'Periode Terpilih', 'Periode Sebelumnya', 'Selisih', 'Perubahan'],
+            ['Metrik', 'Periode Terpilih', 'Periode Sebelumnya', 'Selisih vs sebelumnya', 'Perubahan'],
             [
                 'Total kWh',
                 f"{float(cur.get('total_kwh') or 0):.3f}",
@@ -921,7 +932,7 @@ class ReportGenerator:
                 self._format_change_percent(float(device_row.get('change_percent') or 0)),
             ])
 
-        summary_table = Table(summary_rows, colWidths=[110, 90, 90, 70, 70])
+        summary_table = Table(summary_rows, colWidths=[95, 82, 82, 98, 68])
         summary_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
